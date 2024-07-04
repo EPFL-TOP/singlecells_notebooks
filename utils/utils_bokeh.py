@@ -2,11 +2,12 @@ import json, os
 
 from bokeh.io import output_notebook, show, push_notebook
 from bokeh.layouts import column, row
-from bokeh.models import Button, ColumnDataSource, CustomJS, Select, Span
+from bokeh.models import Button, ColumnDataSource, CustomJS, Select, Span, Whisker
 from bokeh.plotting import figure, curdoc
 from bokeh.application.handlers import FunctionHandler
 from bokeh.application import Application
 from bokeh.server.server import Server
+from bokeh.transform import jitter
 import numpy as np
 
 
@@ -47,11 +48,60 @@ def modify_doc(doc):
     time_of_death_fig.quad(top=hist, bottom=0, left=edges[:-1], right=edges[1:], fill_alpha=0.5, fill_color="black", line_color="white", legend_label="time of death")
 
 
+    osc_cycle_fig = figure(width=300, height=300, title='oscillation cycle')
+    cycle=[]
+    time=[]
+    source_osc_period      = ColumnDataSource(data=dict(cycle=[], time=[]))
+    source_osc_period_err  = ColumnDataSource(data=dict(base=[], upper=[], lower=[]))
+    source_osc_period_line = ColumnDataSource(data=dict(x=[], y=[]))
+
+
+    for p in peaks:
+        max_time=[]
+#peaks[col]['peaks']['max_frame']]
+        try:
+            max_time = peaks[p]['peaks']["max_time"]
+        except KeyError:
+            continue
+        if len(max_time)<2: break
+        for i in range(len(max_time)-1):
+            cycle.append(i+1)
+            time.append(max_time[i+1]-max_time[i])
+    source_osc_period.data=dict(cycle=cycle, time=time)
+    
+
+    classes = list(set(cycle))
+    tmp_dict={}
+    for cl in classes:
+        tmp_dict[cl]=[]
+    for i in range(len(cycle)):
+        tmp_dict[cycle[i]].append(time[i])
+    upper=[]
+    lower=[]
+    mean=[]
+    for c in range(1, len(classes)+1):
+        array = np.array(tmp_dict[c])
+        upper.append(np.mean(array)+np.std(array)/2)
+        lower.append(np.mean(array)-np.std(array)/2)
+        mean.append(np.mean(array))
+    source_osc_period_err.data=dict(base=classes, upper=upper, lower=lower)
+    source_osc_period_line.data=dict(x=classes, y=mean)
+
+    whisker = Whisker(base='base',upper='upper', lower='lower', source=source_osc_period_err, level="annotation", line_width=2)
+    #whisker.upper_head.size=20
+    #whisker.lower_head.size=20
+    osc_cycle_fig.add_layout(whisker)
+    osc_cycle_fig.scatter(x=jitter('cycle', width=0.25, range=osc_cycle_fig.x_range), y='time', source=source_osc_period, size=8)
+    osc_cycle_fig.line('x', 'y', source=source_osc_period_line, line_color='black')
+
+
+
+
     def select_intensity_type(attr, old, new):
         new_layout = create_plots_layout()
         doc.clear()  # Clear the current document
         doc.add_root(column(row(dropdown_intensity_type,dropdown_normalisation_type), 
-                            row(last_peak_time_fig,osc_time_fig, time_of_death_fig), 
+                            row(last_peak_time_fig,osc_time_fig, time_of_death_fig, osc_cycle_fig), 
                             new_layout, print_button, rerender_button))
     dropdown_intensity_type.on_change('value', select_intensity_type)
 
@@ -59,7 +109,7 @@ def modify_doc(doc):
         new_layout = create_plots_layout()
         doc.clear()  # Clear the current document
         doc.add_root(column(row(dropdown_intensity_type,dropdown_normalisation_type), 
-                            row(last_peak_time_fig,osc_time_fig, time_of_death_fig), 
+                            row(last_peak_time_fig,osc_time_fig, time_of_death_fig, osc_cycle_fig), 
                             new_layout, print_button, rerender_button))
     dropdown_normalisation_type.on_change('value', select_normalisation_type)
     
@@ -175,14 +225,14 @@ def modify_doc(doc):
         new_layout = create_plots_layout()
         doc.clear()  # Clear the current document
         doc.add_root(column(row(dropdown_intensity_type, dropdown_normalisation_type),
-                            row(last_peak_time_fig,osc_time_fig, time_of_death_fig), 
+                            row(last_peak_time_fig,osc_time_fig, time_of_death_fig, osc_cycle_fig), 
                             new_layout, print_button, rerender_button))
         # push_notebook()
     rerender_button.on_click(rerender_plots)
 
     # Add the layout and buttons to the current document
     doc.add_root(column(row(dropdown_intensity_type, dropdown_normalisation_type),
-                        row(last_peak_time_fig,osc_time_fig, time_of_death_fig), 
+                        row(last_peak_time_fig,osc_time_fig, time_of_death_fig, osc_cycle_fig), 
                         layout, print_button, rerender_button))
     #doc.add_root(column(print_button, rerender_button))
 
