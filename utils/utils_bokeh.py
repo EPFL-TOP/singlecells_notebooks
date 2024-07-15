@@ -43,8 +43,9 @@ def modify_doc(doc):
     osc_time_fig.quad(top=hist, bottom=0, left=edges[:-1], right=edges[1:], fill_alpha=0.5, fill_color="green", line_color="white", legend_label="end osc")
 
     time_of_death_fig = figure(width=300, height=300, title='time of death')
-    bins = np.linspace(np.min(time_of_death), np.max(time_of_death), 20)    
-    hist, edges = np.histogram(time_of_death, density=False, bins=bins)
+    time_of_death_pos = [t for t in time_of_death if t>0.]
+    bins = np.linspace(np.min(time_of_death_pos), np.max(time_of_death), 20)    
+    hist, edges = np.histogram(time_of_death_pos, density=False, bins=bins)
     time_of_death_fig.quad(top=hist, bottom=0, left=edges[:-1], right=edges[1:], fill_alpha=0.5, fill_color="black", line_color="white", legend_label="time of death")
 
 
@@ -133,8 +134,8 @@ def modify_doc(doc):
                 color_idx=0
                 oscillation_data_x  = [t for t in time if t>=peaks[col]['start_oscillation_time'] and t<=peaks[col]['end_oscillation_time']]
                 oscillation_data_frame = [t for t in range(len(time)) if time[t]>=peaks[col]['start_oscillation_time'] and time[t]<=peaks[col]['end_oscillation_time']]
-                tod_data_x  = [t for t in time if t>=peaks[col]['time_of_death']]
-                tod_data_frame = [t for t in range(len(time)) if time[t]>=peaks[col]['time_of_death']]
+                tod_data_x  = [t for t in time if t>=peaks[col]['time_of_death'] and peaks[col]['time_of_death']>0.]
+                tod_data_frame = [t for t in range(len(time)) if time[t]>=peaks[col]['time_of_death'] and peaks[col]['time_of_death']>0.]
 
 
                 for ch in intensities[col]['channels']:
