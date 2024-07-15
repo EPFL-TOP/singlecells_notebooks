@@ -4,20 +4,22 @@ import numpy as np
 
 
 #__________________________________________________________________
-def get_intensities_time(analysis_data, islist=True):
+def get_intensities_time(analysis_data, selection=('',''), islist=True):
     to_ret={}
     for exp in analysis_data:
-        if not islist: to_ret[exp]={}
+        if selection[0]!='' and selection[0] not in exp: continue
+        if islist==False: to_ret[exp]={}
         for well in analysis_data[exp]:
-            if not islist: to_ret[exp][well]={}
+            if selection[1]!='' and selection[1] not in well: continue
+            if islist==False: to_ret[exp][well]={}
             for pos in analysis_data[exp][well]:
                 for cell in analysis_data[exp][well][pos]['cells']:
                     name = '{}_{}'.format(pos.replace('.nd2',''), cell.replace('cell',''))
-                    if not islist: to_ret[exp][well][name]={'time':[], 'channels':[]}
+                    if islist==False: to_ret[exp][well][name]={'time':[], 'channels':[]}
                     else: to_ret[name]={'time':[], 'channels':[]}
                     if len(analysis_data[exp][well][pos][cell]['ROI']["intensity_mean"])>0:
                         for ch in analysis_data[exp][well][pos][cell]['ROI']["intensity_mean"][0]:
-                            if not islist:
+                            if islist==False:
                                 to_ret[exp][well][name]['channels'].append(ch)
                                 to_ret[exp][well][name][ch]={'mean':[], 'max':[], 'std':[]}
                             else:
@@ -25,7 +27,7 @@ def get_intensities_time(analysis_data, islist=True):
                                 to_ret[name][ch]={'mean':[], 'max':[], 'std':[]}
                     
                     for tf in range(len(analysis_data[exp][well][pos][cell]['time'])):
-                        if not islist:
+                        if islist==False:
                             to_ret[exp][well][name]['time'].append(analysis_data[exp][well][pos][cell]['time'][tf]/60000.)                            
                             for ch in to_ret[exp][well][name]['channels']:
                                 to_ret[exp][well][name][ch]['mean'].append(analysis_data[exp][well][pos][cell]['ROI']["intensity_mean"][tf][ch])
@@ -43,16 +45,18 @@ def get_intensities_time(analysis_data, islist=True):
 
 
 #__________________________________________________________________
-def get_peaks_tod(analysis_data, islist=True):
+def get_peaks_tod(analysis_data, selection=('',''), islist=True):
     to_ret={}
     for exp in analysis_data:
-        if not islist: to_ret[exp]={}
+        if selection[0]!='' and selection[0] not in exp: continue
+        if islist==False: to_ret[exp]={}
         for well in analysis_data[exp]:
-            if not islist: to_ret[exp][well]={}
+            if selection[1]!='' and selection[1] not in well: continue
+            if islist==False: to_ret[exp][well]={}
             for pos in analysis_data[exp][well]:
                 for cell in analysis_data[exp][well][pos]['cells']:
                     name = '{}_{}'.format(pos.replace('.nd2',''), cell.replace('cell',''))
-                    if not islist: to_ret[exp][well][name]={'start_oscillation_time':analysis_data[exp][well][pos][cell]['start_oscillation_time'], 
+                    if islist==False: to_ret[exp][well][name]={'start_oscillation_time':analysis_data[exp][well][pos][cell]['start_oscillation_time'], 
                                                             'end_oscillation_time':analysis_data[exp][well][pos][cell]['end_oscillation_time'],
                                                             'time_of_death':analysis_data[exp][well][pos][cell]['time_of_death'],
                                                             'peaks':{'min_time':analysis_data[exp][well][pos][cell]['peaks']['min_time'],
@@ -78,9 +82,9 @@ def get_peaks_tod(analysis_data, islist=True):
 #__________________________________________________________________
 def get_last_peaks_time(peaks_tod, selection=('','')):
     last_peak_list=[]
-    if selection[0]!='':
+    if selection[0]!='' or selection[1]!='':
         for exp in peaks_tod:
-            if exp!=selection[0]:continue
+            if exp!=selection[0] and selection[0]!='':continue
             for well in peaks_tod[exp]:
                 if selection[1]!='' and selection[1] not in well:continue
                 for pos in peaks_tod[exp][well]:
@@ -109,9 +113,9 @@ def get_last_peaks_time(peaks_tod, selection=('','')):
 #__________________________________________________________________
 def get_peaks_stuff_time(name, peaks_tod, selection=('','')):
     to_ret=[]
-    if selection[0]!='':
+    if selection[0]!='' or selection[1]!='':
         for exp in peaks_tod:
-            if exp!=selection[0]:continue
+            if exp!=selection[0] and selection[0]!='':continue
             for well in peaks_tod[exp]:
                 if selection[1]!='' and selection[1] not in well:continue
                 for pos in peaks_tod[exp][well]:
