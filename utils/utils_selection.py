@@ -109,12 +109,15 @@ def select_cell_flags(analysis_data, flag, mode='all'):
 
 
 #__________________________________________________________________
-def select_cell_main_features(analysis_data, flag, mode='gt'):
+def select_cell_main_features(analysis_data, flag, mode='gt', useneg=False):
     to_ret = copy.deepcopy(analysis_data)
     for exp in analysis_data:
         for well in analysis_data[exp]:
             for pos in analysis_data[exp][well]:
                 for cell in analysis_data[exp][well][pos]['cells']:
+                    if useneg==False and analysis_data[exp][well][pos][cell][flag[0]]<0:
+                        continue
+
                     if mode == 'gt' and analysis_data[exp][well][pos][cell][flag[0]]<flag[1]:
                         del to_ret[exp][well][pos][cell]
                         to_ret[exp][well][pos]['cells'].remove(cell)
