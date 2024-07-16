@@ -96,6 +96,6 @@ def copy_files_with_verification(src_dir, dest_dir, algorithm='sha256', max_retr
     print(f"Total files failed: {files_failed}")
 
 # Example usage
-src_directory  = '/Volumes/upoates/common/Clement/TEST/exp001'
-dest_directory = '/Volumes/upoates/common/Clement/TEST/exp_copy'
-copy_files_with_verification(src_directory, dest_directory)
+#src_directory  = '/Volumes/upoates/common/Clement/TEST/exp001'
+#dest_directory = '/Volumes/upoates/common/Clement/TEST/exp_copy'
+#copy_files_with_verification(src_directory, dest_directory)
