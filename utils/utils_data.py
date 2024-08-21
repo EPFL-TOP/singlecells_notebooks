@@ -66,15 +66,26 @@ def get_peaks_tod(analysis_data, selection=('',''), islist=True):
                                                                      'min_int':analysis_data[exp][well][pos][cell]['peaks']['min_int'],
                                                                      'max_int':analysis_data[exp][well][pos][cell]['peaks']['max_int']}
                     else:
-                        to_ret[name]={'start_oscillation_time':analysis_data[exp][well][pos][cell]['start_oscillation_time'], 
-                                      'end_oscillation_time':analysis_data[exp][well][pos][cell]['end_oscillation_time'],
-                                      'time_of_death':analysis_data[exp][well][pos][cell]['time_of_death'],
-                                      'peaks':{'min_time':analysis_data[exp][well][pos][cell]['peaks']['min_time'],
-                                               'max_time':analysis_data[exp][well][pos][cell]['peaks']['max_time'],
-                                               'min_frame':analysis_data[exp][well][pos][cell]['peaks']['min_frame'],
-                                               'max_frame':analysis_data[exp][well][pos][cell]['peaks']['max_frame']},
-                                               'min_int':analysis_data[exp][well][pos][cell]['peaks']['min_int'],
-                                               'max_int':analysis_data[exp][well][pos][cell]['peaks']['max_int']}
+                        if len(analysis_data[exp][well][pos][cell]['peaks'])==0:
+                            to_ret[name]={'start_oscillation_time':analysis_data[exp][well][pos][cell]['start_oscillation_time'], 
+                                        'end_oscillation_time':analysis_data[exp][well][pos][cell]['end_oscillation_time'],
+                                        'time_of_death':analysis_data[exp][well][pos][cell]['time_of_death'],
+                                        'peaks':{'min_time':[],
+                                                'max_time':[],
+                                                'min_frame':[],
+                                                'max_frame':[]},
+                                                'min_int':[],
+                                                'max_int':[]}
+                        else:
+                            to_ret[name]={'start_oscillation_time':analysis_data[exp][well][pos][cell]['start_oscillation_time'], 
+                                        'end_oscillation_time':analysis_data[exp][well][pos][cell]['end_oscillation_time'],
+                                        'time_of_death':analysis_data[exp][well][pos][cell]['time_of_death'],
+                                        'peaks':{'min_time':analysis_data[exp][well][pos][cell]['peaks']['min_time'],
+                                                'max_time':analysis_data[exp][well][pos][cell]['peaks']['max_time'],
+                                                'min_frame':analysis_data[exp][well][pos][cell]['peaks']['min_frame'],
+                                                'max_frame':analysis_data[exp][well][pos][cell]['peaks']['max_frame']},
+                                                'min_int':analysis_data[exp][well][pos][cell]['peaks']['min_int'],
+                                                'max_int':analysis_data[exp][well][pos][cell]['peaks']['max_int']}
 
     return to_ret
 
@@ -105,7 +116,7 @@ def get_last_peaks_time(peaks_tod, selection=('','')):
                     last_peak_list.append(peaks_tod[pos]['peaks']['max_time'][-1])
                 else:
                     last_peak_list.append(peaks_tod[pos]['peaks']['min_time'][-1])
-            if len(peaks_tod[pos]['peaks']['min_time'])==0:       
+            if len(peaks_tod[pos]['peaks']['min_time'])==0 and len(peaks_tod[pos]['peaks']['max_time'])>0:       
                 last_peak_list.append(peaks_tod[pos]['peaks']['max_time'][-1])
 
     return last_peak_list
