@@ -1,5 +1,8 @@
 import nd2
 import numpy as np
+import matplotlib.pyplot as plt
+import pathlib
+
 
 def experiment_sampling_t(nd_path):
     """
@@ -98,6 +101,44 @@ def position_time_stamps(nd_path_split):
     t_values_expected_diff_woffset = t_values_expected_diff - t_values_arr[0]
     t_values_succ_diff = np.diff(t_values_expected_diff)
     return t_values_arr, t_values_expected_diff_woffset, t_values_succ_diff
+
+
+def position_time_stamps_batch(root_directory):
+    subdirectory_l = []
+    for subdirectory in pathlib.Path(root_directory).iterdir():
+        if subdirectory.is_dir():
+            path_l = []
+            for file in subdirectory.iterdir():
+                if '.nd2' in file.as_posix():
+                    path_l.append(file)
+            if path_l:
+                subdirectory_l.append(subdirectory)
+
+    for subdirectory in subdirectory_l:
+        name = subdirectory.name
+        path_l = [file for file in subdirectory.iterdir() if '.nd2' in file.as_posix()]
+        avg_t_values_exp = np.mean(np.asarray([position_time_stamps(p.as_posix())[1] for p in path_l]), axis=0)
+        avg_t_values_succ_diff = np.mean(np.asarray([position_time_stamps(p.as_posix())[2] for p in path_l]), axis=0)
+
+        # Plot
+        plt.close('All')
+        fig, axes = plt.subplots(ncols=2, figsize=(10, 5))
+        fig.suptitle(name, fontsize=16)
+
+        # avg_t_values_exp subplot
+        axes[0].plot(avg_t_values_exp)
+        axes[0].set_title('Average deviation from expected value')
+        axes[0].set_xlabel('Time frame')
+        axes[0].set_ylabel('Deviation (s)')
+
+        # avg_t_values_succ_diff
+        axes[1].plot(avg_t_values_succ_diff)
+        axes[1].set_title('Average successive differences of deviations')
+        axes[1].set_xlabel('Time frame')
+        axes[1].set_ylabel('Deviation (s)')
+
+        plt.tight_layout()
+        plt.show()
 
 
 if __name__ == '__main__':
