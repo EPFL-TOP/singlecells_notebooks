@@ -30,6 +30,8 @@ from bokeh.transform import linear_cmap
 from bokeh.palettes import Greys256  # Grayscale palette
 
 data={}
+device = None
+model_detect = None
 
 class ToTensorNormalize:
     def __call__(self, image):
