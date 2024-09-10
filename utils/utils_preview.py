@@ -30,7 +30,6 @@ from bokeh.transform import linear_cmap
 from bokeh.palettes import Greys256  # Grayscale palette
 
 data={}
-device = None
 model_detect = None
 
 class ToTensorNormalize:
@@ -44,7 +43,8 @@ class ToTensorNormalize:
         return image
 
 
-def load_model_detect(model_path, num_classes, device):
+def load_model_detect(model_path, num_classes):
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights='FasterRCNN_ResNet50_FPN_Weights.DEFAULT')
     in_features = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
@@ -72,7 +72,7 @@ def preprocess_image_pytorch(image_array):
 
 
 def process(file, low_crop, high_crop, model_detect):
-
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     current_file=os.path.join(file)
     time_lapse_path = Path(current_file)
     print('time_lapse_path = ',time_lapse_path)
@@ -177,7 +177,6 @@ def run_server():
 
 def load_model(model_path):
     num_classes_detect = 2
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    model_detect = load_model_detect(model_path, num_classes_detect, device)
+    model_detect = load_model_detect(model_path, num_classes_detect)
     return model_detect
 
