@@ -71,7 +71,7 @@ def preprocess_image_pytorch(image_array):
     return image.unsqueeze(0)  # Add batch dimension
 
 
-def load_nd2(file, low_crop, high_crop):
+def process(file, low_crop, high_crop, model_detect):
 
     current_file=os.path.join(file)
     time_lapse_path = Path(current_file)
@@ -179,4 +179,5 @@ def load_model(model_path):
     num_classes_detect = 2
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     model_detect = load_model_detect(model_path, num_classes_detect, device)
+    return model_detect
 
