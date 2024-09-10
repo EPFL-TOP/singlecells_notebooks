@@ -174,7 +174,7 @@ def run_server():
 
 
 
-model_path = r'..\singleCell_catalog\cell_detection_model.pth'
+model_path = r' C:\Users\helsens\software\singleCell_catalog\cell_detection_model.pth'
 num_classes_detect = 2
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 model_detect = load_model_detect(model_path, num_classes_detect, device)
