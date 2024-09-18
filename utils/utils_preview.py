@@ -97,17 +97,6 @@ def get_timelaps(file):
     for pos in range(num_pos):
         time_data[pos]=[timesteps[num_pos*frame+pos] for frame in range(num_frames)]
 
-    period_diff={}
-    for pos in time_data:
-        if pos=='exp_period':continue
-        for time in range(len(time_data[pos])-1):
-            if time==0:continue
-            try:
-                period_diff[time].append(exp_period*time - time_data[pos][time])
-                print('time ', time, ' exp_period*time ', exp_period*time, ' time_data[pos][time] ',time_data[pos][time])
-            except KeyError:
-                period_diff[time]=[]
-
 
 
 def preprocess_image_pytorch(image_array):
@@ -119,28 +108,6 @@ def preprocess_image_pytorch(image_array):
 def process(file, low_crop, high_crop, model_detect, n=-9999):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     get_timelaps(file)
-
-
-    #current_file=os.path.join(file)
-    #time_lapse_path = Path(current_file)
-    #f = nd2.ND2File(time_lapse_path.as_posix())
-    #exp_period = f.experiment[0].parameters.durationMs/(f.experiment[0].count-1)
-    #f.close()
-
-    #stack = nd2reader.reader.ND2Reader(time_lapse_path.as_posix())
-    #metadata = stack.metadata
-    #num_frames = metadata['num_frames']
-    #num_pos = len(metadata["fields_of_view"])
-
-    #if num_pos*num_frames != len(metadata["z_coordinates"]):
-    #    print('ERROR DIFFERENT NUMBER OF frames')
-
-    #timesteps = stack.timesteps.tolist()
-
-    #time_data['exp_period']=exp_period
-
-    #for pos in range(num_pos):
-    #    time_data[pos]=[timesteps[num_pos*frame+pos] for frame in range(num_frames)]
 
 
 
@@ -192,7 +159,8 @@ def process(file, low_crop, high_crop, model_detect, n=-9999):
                 time=[]
                 for ch_id, ch_img in enumerate(pos):
                     if ch_id == 0:
-                        time=[i for i in range(len(ch_img))]
+                        #time=[i for i in range(len(ch_img))]
+                        time=time_data[pos_id]
                         time=np.array(time)
                         continue
                     intensities[ch_id]=[]
@@ -216,6 +184,20 @@ def modify_doc(doc):
 
         print('time_data ',time_data)
         print('len(data) ',len(data))
+        exp_period=time_data['exp_period']
+        period_diff={}
+        for pos in time_data:
+            if pos=='exp_period':continue
+            for time in range(len(time_data[pos])-1):
+                if time==0:continue
+                try:
+                    period_diff[time].append(exp_period*time - time_data[pos][time])
+                    print('time ', time, ' exp_period*time ', exp_period*time, ' time_data[pos][time] ',time_data[pos][time])
+                except KeyError:
+                    period_diff[time]=[]
+        print(period_diff)
+        print(np.array(period_diff).shape)
+
 
         plots = []
         n_columns = 6
