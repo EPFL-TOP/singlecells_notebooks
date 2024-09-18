@@ -183,7 +183,7 @@ def modify_doc(doc):
     def create_bokeh_layout():
 
         exp_period=time_data['exp_period']
-        print(time_data)
+#        print(time_data)
         period_diff={}
         for pos in time_data:
             if pos=='exp_period':continue
@@ -194,7 +194,7 @@ def modify_doc(doc):
                     #print('time ', time, ' exp_period*time ', exp_period*time, ' time_data[pos][time] ',time_data[pos][time])
                 except KeyError:
                     period_diff[time]=[]
-        print('period_diff ',period_diff)
+        print('========================================period_diff ',period_diff)
 
         period_mean = [0 for i in range(len(period_diff))]
         time = [i*exp_period/60000. for i in range(len(period_diff))]
