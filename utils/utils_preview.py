@@ -39,6 +39,7 @@ import logging
 nest_asyncio.apply()
 data={}
 time_data={}
+
 model_detect = None
 
 class ToTensorNormalize:
@@ -91,7 +92,7 @@ def get_timelaps(file):
 
     timesteps = stack.timesteps.tolist()
 
-    time_data = {'exp_period':exp_period}
+    time_data['exp_period']=exp_period
 
     for pos in range(num_pos):
         time_data[pos]=[timesteps[num_pos*frame+pos] for frame in range(num_frames)]
