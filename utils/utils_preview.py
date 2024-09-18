@@ -197,13 +197,21 @@ def modify_doc(doc):
         print('========================================period_diff ',period_diff)
 
         period_mean = [0 for i in range(len(period_diff))]
+        period_std = [0 for i in range(len(period_diff))]
         time = [i*exp_period/60000. for i in range(len(period_diff))]
+        time = np.array(time)
         for p in period_diff:
-            print(p)
+            period_mean[p]=np.mean(period_diff[p])/1000.
             period_mean[p]=np.mean(period_diff[p])/1000.
 
+        period_mean = np.array(period_mean)
         p_period = figure(width=300, height=300, title=f"period {pos}")
         p_period.line(x=time, y=period_mean, line_color='blue')
+        # Plot the error band (upper and lower bounds)
+        p_period.patch(np.concatenate([time, time[::-1]]), 
+        np.concatenate([period_mean + period_std, (period_mean - period_std)[::-1]]), 
+        color='blue', alpha=0.2, legend_label="Error band")
+
 
 
         plots = []
