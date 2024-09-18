@@ -184,7 +184,7 @@ def modify_doc(doc):
 
         exp_period=time_data['exp_period']
 
-        print('len time data 'len(time_data))
+        print('len time data ',len(time_data))
         period_diff={}
         for pos in time_data:
             if pos=='exp_period':continue
