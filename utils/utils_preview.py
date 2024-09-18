@@ -100,7 +100,7 @@ def preprocess_image_pytorch(image_array):
 
 def process(file, low_crop, high_crop, model_detect):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    time_data = get_timelaps()
+    time_data = get_timelaps(file)
 
     current_file=os.path.join(file)
     time_lapse_path = Path(current_file)
