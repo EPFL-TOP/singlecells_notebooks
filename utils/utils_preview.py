@@ -188,7 +188,7 @@ def modify_doc(doc):
         for pos in time_data:
             if pos=='exp_period':continue
             for time in range(len(time_data[pos])):
-                if time==0:continue
+                #if time==0:continue
                 try:
                     period_diff[time].append(time_data[pos][time] - exp_period*time -  time_data[pos][0])
                     #print('time ', time, ' exp_period*time ', exp_period*time, ' time_data[pos][time] ',time_data[pos][time])
@@ -199,6 +199,7 @@ def modify_doc(doc):
         period_mean = [0 for i in range(len(period_diff))]
         time = [i*exp_period/60000. for i in range(len(period_diff))]
         for p in period_diff:
+            print(p)
             period_mean[p]=np.mean(period_diff[p])/1000.
 
         p_period = figure(width=300, height=300, title=f"period {pos}")
