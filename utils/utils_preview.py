@@ -183,6 +183,7 @@ def modify_doc(doc):
     def create_bokeh_layout():
 
         exp_period=time_data['exp_period']
+        print(time_data)
         period_diff={}
         for pos in time_data:
             if pos=='exp_period':continue
