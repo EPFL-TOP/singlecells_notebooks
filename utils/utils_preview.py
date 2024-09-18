@@ -75,7 +75,7 @@ def get_timelaps(file):
 
     exp_period = f.experiment[0].parameters.durationMs/(f.experiment[0].count-1)
 
-    stack = nd2.reader.ND2Reader(time_lapse_path.as_posix())
+    stack = nd2reader.reader.ND2Reader(time_lapse_path.as_posix())
     metadata = stack.metadata
     num_frames = metadata['num_frames']
     num_pos = len(metadata["fields_of_view"])
