@@ -186,17 +186,7 @@ def process(file, low_crop, high_crop, model_detect, n=-9999):
 
 
 def modify_doc(doc):
-    exp_period=time_data['exp_period']
-    period_diff={}
-    for pos in time_data:
-        if pos=='exp_period':continue
-        for time in range(len(time_data[pos])-1):
-            if time==0:continue
-            try:
-                period_diff[time].append(exp_period*time - time_data[pos][time])
-                print('time ', time, ' exp_period*time ', exp_period*time, ' time_data[pos][time] ',time_data[pos][time])
-            except KeyError:
-                period_diff[time]=[]
+    print('time_data ',time_data)
 
     try:
         # Your Bokeh app code goes here, for example:
