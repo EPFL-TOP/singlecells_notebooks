@@ -31,6 +31,8 @@ from bokeh.models import LinearColorMapper, ColorBar
 from bokeh.transform import linear_cmap
 from bokeh.palettes import Greys256  # Grayscale palette
 
+import nest_asyncio
+nest_asyncio.apply()
 data={}
 time_data={}
 model_detect = None
@@ -209,11 +211,15 @@ def modify_doc(doc):
 
     doc.add_root(grid)
 
+
+
 def run_server():
     server = Server({'/': modify_doc}, num_procs=1)
     server.start()
     server.io_loop.add_callback(server.show, "/")
-    server.io_loop.start()
+    # Do not start a new loop; just add a callback to run it
+    server.io_loop.add_callback(server.stop)  # To stop gracefully after showing
+
 
 
 
