@@ -32,6 +32,10 @@ from bokeh.transform import linear_cmap
 from bokeh.palettes import Greys256  # Grayscale palette
 
 import nest_asyncio
+
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
 nest_asyncio.apply()
 data={}
 time_data={}
@@ -194,8 +198,17 @@ def modify_doc(doc):
             except KeyError:
                 period_diff[time]=[]
 
+    try:
+        # Your Bokeh app code goes here, for example:
+        layout = create_bokeh_layout()  # Make sure this function works as expected
+        doc.add_root(layout)
+        logging.info("App loaded successfully.")
+    except Exception as e:
+        logging.error(f"Error in modify_doc: {e}", exc_info=True)
 
 
+
+def create_bokeh_layout():
 
     plots = []
     n_columns = 6
@@ -221,8 +234,8 @@ def modify_doc(doc):
         plots.append(p_plot)
 
     grid = gridplot(plots, ncols=n_columns)
+    return grid
 
-    doc.add_root(grid)
 
 
 
