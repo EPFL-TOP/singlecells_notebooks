@@ -118,7 +118,37 @@ def preprocess_image_pytorch(image_array):
 
 def process(file, low_crop, high_crop, model_detect, n=-9999):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    get_timelaps(file)
+    #get_timelaps(file)
+
+
+
+
+
+
+    current_file=os.path.join(file)
+    time_lapse_path = Path(current_file)
+    f = nd2.ND2File(time_lapse_path.as_posix())
+    exp_period = f.experiment[0].parameters.durationMs/(f.experiment[0].count-1)
+    f.close()
+
+    stack = nd2reader.reader.ND2Reader(time_lapse_path.as_posix())
+    metadata = stack.metadata
+    num_frames = metadata['num_frames']
+    num_pos = len(metadata["fields_of_view"])
+
+    if num_pos*num_frames != len(metadata["z_coordinates"]):
+        print('ERROR DIFFERENT NUMBER OF frames')
+
+    timesteps = stack.timesteps.tolist()
+
+    time_data['exp_period']=exp_period
+
+
+
+
+
+
+
 
     current_file=os.path.join(file)
     time_lapse_path = Path(current_file)
@@ -188,6 +218,36 @@ def process(file, low_crop, high_crop, model_detect, n=-9999):
 
 def modify_doc(doc):
 
+    def create_bokeh_layout():
+
+        print('time_data ',time_data)
+        print('len(data) ',len(data))
+
+        plots = []
+        n_columns = 6
+        color_mapper = LinearColorMapper(palette=Greys256, low=0, high=255)  # Adjust low and high according to your data range
+        for pos in data:
+
+            print(pos)
+            image = data[pos]['img']
+        
+            p_img = figure(width=300, height=300, title=f"Image {pos}")
+            p_img.image(image=[image], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
+            p_img.axis.visible = False
+            p_img.grid.visible = False
+            p_img.axis.visible = False
+            p_img.grid.visible = False
+
+            p_plot = figure(width=300, height=300, title=f"Intensity {pos}")
+            for ch in data[pos]['intensities']:
+                if ch==1:  p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='blue')
+                elif ch==2:p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='black')
+
+            plots.append(p_img)
+            plots.append(p_plot)
+
+        grid = gridplot(plots, ncols=n_columns)
+        return grid
 
     try:
         # Your Bokeh app code goes here, for example:
@@ -196,40 +256,6 @@ def modify_doc(doc):
         logging.info("App loaded successfully.")
     except Exception as e:
         logging.error(f"Error in modify_doc: {e}", exc_info=True)
-
-
-
-def create_bokeh_layout():
-
-    print('time_data ',time_data)
-    print('len(data) ',len(data))
-
-    plots = []
-    n_columns = 6
-    color_mapper = LinearColorMapper(palette=Greys256, low=0, high=255)  # Adjust low and high according to your data range
-    for pos in data:
-
-        print(pos)
-        image = data[pos]['img']
-    
-        p_img = figure(width=300, height=300, title=f"Image {pos}")
-        p_img.image(image=[image], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
-        p_img.axis.visible = False
-        p_img.grid.visible = False
-        p_img.axis.visible = False
-        p_img.grid.visible = False
-
-        p_plot = figure(width=300, height=300, title=f"Intensity {pos}")
-        for ch in data[pos]['intensities']:
-            if ch==1:  p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='blue')
-            elif ch==2:p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='black')
-
-        plots.append(p_img)
-        plots.append(p_plot)
-
-    grid = gridplot(plots, ncols=n_columns)
-    return grid
-
 
 
 
