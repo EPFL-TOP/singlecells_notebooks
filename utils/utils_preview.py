@@ -218,7 +218,7 @@ def run_server():
     server.start()
     server.io_loop.add_callback(server.show, "/")
     # Do not start a new loop; just add a callback to run it
-    server.io_loop.add_callback(server.stop)  # To stop gracefully after showing
+    #server.io_loop.add_callback(server.stop)  # To stop gracefully after showing
 
 
 
