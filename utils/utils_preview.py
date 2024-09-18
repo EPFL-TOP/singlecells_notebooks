@@ -99,7 +99,7 @@ def preprocess_image_pytorch(image_array):
     return image.unsqueeze(0)  # Add batch dimension
 
 
-def process(file, low_crop, high_crop, model_detect):
+def process(file, low_crop, high_crop, model_detect, n=-9999):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     get_timelaps(file)
 
@@ -113,6 +113,7 @@ def process(file, low_crop, high_crop, model_detect):
 
 
     for pos_id, pos in enumerate(time_lapse):
+        if n>0 and n==pos_id:break
         pos = pos.transpose(1,0,2,3)
         BF_images = pos[0]
 
