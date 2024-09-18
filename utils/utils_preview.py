@@ -72,8 +72,8 @@ def get_timelaps(file):
     current_file=os.path.join(file)
     time_lapse_path = Path(current_file)
     f = nd2.ND2File(time_lapse_path.as_posix())
-
     exp_period = f.experiment[0].parameters.durationMs/(f.experiment[0].count-1)
+    f.close()
 
     stack = nd2reader.reader.ND2Reader(time_lapse_path.as_posix())
     metadata = stack.metadata
@@ -85,12 +85,11 @@ def get_timelaps(file):
 
     timesteps = stack.timesteps.tolist()
 
-    out_dict = {'exp_period':exp_period}
+    time_data = {'exp_period':exp_period}
 
     for pos in range(num_pos):
-        out_dict[pos]=[timesteps[num_pos*frame+pos] for frame in range(num_frames)]
+        time_data[pos]=[timesteps[num_pos*frame+pos] for frame in range(num_frames)]
 
-    return out_dict
 
 def preprocess_image_pytorch(image_array):
     transform = ToTensorNormalize()
@@ -100,7 +99,7 @@ def preprocess_image_pytorch(image_array):
 
 def process(file, low_crop, high_crop, model_detect):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    time_data = get_timelaps(file)
+    get_timelaps(file)
 
     current_file=os.path.join(file)
     time_lapse_path = Path(current_file)
