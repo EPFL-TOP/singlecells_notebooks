@@ -92,6 +92,18 @@ def get_timelaps(file):
     for pos in range(num_pos):
         time_data[pos]=[timesteps[num_pos*frame+pos] for frame in range(num_frames)]
 
+    period_diff={}
+    for pos in time_data:
+        if pos=='exp_period':continue
+        for time in range(len(time_data[pos])-1):
+            if time==0:continue
+            try:
+                period_diff[time].append(exp_period*time - time_data[pos][time])
+                print('time ', time, ' exp_period*time ', exp_period*time, ' time_data[pos][time] ',time_data[pos][time])
+            except KeyError:
+                period_diff[time]=[]
+
+
 
 def preprocess_image_pytorch(image_array):
     transform = ToTensorNormalize()
@@ -229,7 +241,9 @@ def run_server():
         server.io_loop.start()
     except RuntimeError:
         # If the loop is already running, continue without restarting it
+        print('loop is already running')
         pass
+        
 
 
 
