@@ -83,6 +83,8 @@ def get_timelaps(file):
     if num_pos*num_frames != len(metadata["z_coordinates"]):
         print('ERROR DIFFERENT NUMBER OF frames')
 
+    timesteps = stack.timesteps
+    print('------- ',timesteps.shape,'  ',timesteps.dtype)
     timesteps = stack.timesteps.tolist()
 
     out_dict = {'exp_period':exp_period}
