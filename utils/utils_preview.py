@@ -24,7 +24,7 @@ from torchvision import models
 from bokeh.plotting import figure, show, output_file
 from bokeh.layouts import gridplot, row, column
 from bokeh.io import curdoc
-from bokeh.models import ColumnDataSource
+from bokeh.models import ColumnDataSource, Patch
 from bokeh.plotting import figure, curdoc
 from bokeh.server.server import Server
 from bokeh.models import LinearColorMapper, ColorBar
@@ -212,8 +212,12 @@ def modify_doc(doc):
         print('time  ',np.concatenate([time, time[::-1]]))
         print('period  ',np.concatenate([period_mean + period_std, (period_mean - period_std)[::-1]]))
 
-        p_period.patch(np.concatenate([time, time[::-1]]), np.concatenate([period_mean + period_std, (period_mean - period_std)[::-1]]), color='blue', alpha=0.2, legend_label="Error band")
-
+        x=np.hstack((time, time[::-1]))
+        y=np.hstack((period_mean + period_std, (period_mean - period_std)[::-1]]))
+        source_period = ColumnDataSource(dict(x=x, y=y))
+        #p_period.patch(np.concatenate([time, time[::-1]]), np.concatenate([period_mean + period_std, (period_mean - period_std)[::-1]]), color='blue', alpha=0.2, legend_label="Error band")
+        glyph = Patch(x="x", y="y", fill_color="#a6cee3")
+        p_period.add_glyph(source_period, glyph)
 
 
         plots = []
