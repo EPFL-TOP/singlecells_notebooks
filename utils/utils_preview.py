@@ -118,13 +118,9 @@ def preprocess_image_pytorch(image_array):
 
 def process(file, low_crop, high_crop, model_detect, n=-9999):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    #get_timelaps(file)
+    get_timelaps(file)
 
-
-
-
-
-
+'''
     current_file=os.path.join(file)
     time_lapse_path = Path(current_file)
     f = nd2.ND2File(time_lapse_path.as_posix())
@@ -143,8 +139,9 @@ def process(file, low_crop, high_crop, model_detect, n=-9999):
 
     time_data['exp_period']=exp_period
 
-
-
+    for pos in range(num_pos):
+        time_data[pos]=[timesteps[num_pos*frame+pos] for frame in range(num_frames)]
+'''
 
 
 
