@@ -183,7 +183,8 @@ def modify_doc(doc):
     def create_bokeh_layout():
 
         exp_period=time_data['exp_period']
-#        print(time_data)
+
+        print('len time data 'len(time_data))
         period_diff={}
         for pos in time_data:
             if pos=='exp_period':continue
@@ -208,9 +209,10 @@ def modify_doc(doc):
         p_period = figure(width=300, height=300, title=f"period {pos}")
         p_period.line(x=time, y=period_mean, line_color='blue')
         # Plot the error band (upper and lower bounds)
-        p_period.patch(np.concatenate([time, time[::-1]]), 
-        np.concatenate([period_mean + period_std, (period_mean - period_std)[::-1]]), 
-        color='blue', alpha=0.2, legend_label="Error band")
+        print('time  ',np.concatenate([time, time[::-1]]))
+        print('period  ',np.concatenate([period_mean + period_std, (period_mean - period_std)[::-1]]))
+
+        p_period.patch(np.concatenate([time, time[::-1]]), np.concatenate([period_mean + period_std, (period_mean - period_std)[::-1]]), color='blue', alpha=0.2, legend_label="Error band")
 
 
 
