@@ -1,6 +1,8 @@
 import os
 import numpy  as np
 import nd2
+import nd2reader as nd2reader
+
 from pathlib import Path
 from skimage.filters import threshold_triangle, gaussian
 from skimage.morphology import binary_opening, disk, binary_closing, white_tophat
@@ -30,6 +32,7 @@ from bokeh.transform import linear_cmap
 from bokeh.palettes import Greys256  # Grayscale palette
 
 data={}
+time_data={}
 model_detect = None
 
 class ToTensorNormalize:
@@ -65,6 +68,30 @@ def load_model_detect(model_path, num_classes):
 
 
 
+def get_timelaps(file):
+    current_file=os.path.join(file)
+    time_lapse_path = Path(current_file)
+    f = nd2.ND2File(time_lapse_path.as_posix())
+
+    exp_period = f.experiment[0].parameters.durationMs/(f.experiment[0].count-1)
+
+    stack = nd2.reader.ND2Reader(time_lapse_path.as_posix())
+    metadata = stack.metadata
+    num_frames = metadata['num_frames']
+    num_pos = len(metadata["fields_of_view"])
+
+    if num_pos*num_frames != len(metadata["z_coordinates"]):
+        print('ERROR DIFFERENT NUMBER OF frames')
+
+    timesteps = stack.timesteps.tolist()
+
+    out_dict = {'exp_period':exp_period}
+
+    for pos in range(num_pos):
+        out_dict[pos]=[timesteps[num_pos*frame+pos] for frame in num_frames]
+
+    return out_dict
+
 def preprocess_image_pytorch(image_array):
     transform = ToTensorNormalize()
     image = transform(image_array)
@@ -73,6 +100,8 @@ def preprocess_image_pytorch(image_array):
 
 def process(file, low_crop, high_crop, model_detect):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    time_data = get_timelaps()
+
     current_file=os.path.join(file)
     time_lapse_path = Path(current_file)
     print('time_lapse_path = ',time_lapse_path)
@@ -139,6 +168,20 @@ def process(file, low_crop, high_crop, model_detect):
 
 
 def modify_doc(doc):
+    exp_period=time_data['exp_period']
+    period_diff={}
+    for pos in time_data:
+        if pos=='exp_period':continue
+        for time in range(len(time_data[pos])-1):
+            if time==0:continue
+            try:
+                period_diff[time].append(exp_period*time - time_data[pos][time])
+                print('time ', time, ' exp_period*time ', exp_period*time, ' time_data[pos][time] ',time_data[pos][time])
+            except KeyError:
+                period_diff[time]=[]
+
+
+
 
     plots = []
     n_columns = 6
