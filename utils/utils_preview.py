@@ -160,7 +160,7 @@ def process(file, low_crop, high_crop, model_detect, n=-9999):
                 for ch_id, ch_img in enumerate(pos):
                     if ch_id == 0:
                         #time=[i for i in range(len(ch_img))]
-                        time=time_data[pos_id]
+                        time=[t/60000. for t in time_data[pos_id]]
                         time=np.array(time)
                         continue
                     intensities[ch_id]=[]
@@ -182,8 +182,6 @@ def modify_doc(doc):
 
     def create_bokeh_layout():
 
-        print('time_data ',time_data)
-        print('len(data) ',len(data))
         exp_period=time_data['exp_period']
         period_diff={}
         for pos in time_data:
@@ -191,12 +189,11 @@ def modify_doc(doc):
             for time in range(len(time_data[pos])-1):
                 if time==0:continue
                 try:
-                    period_diff[time].append(exp_period*time - time_data[pos][time])
-                    print('time ', time, ' exp_period*time ', exp_period*time, ' time_data[pos][time] ',time_data[pos][time])
+                    period_diff[time].append(-exp_period*time + time_data[pos][time])
+                    #print('time ', time, ' exp_period*time ', exp_period*time, ' time_data[pos][time] ',time_data[pos][time])
                 except KeyError:
                     period_diff[time]=[]
         print(period_diff)
-        print(np.array(period_diff).shape)
 
 
         plots = []
