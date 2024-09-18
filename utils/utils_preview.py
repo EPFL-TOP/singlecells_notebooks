@@ -22,7 +22,7 @@ from torchvision import models
 
 
 from bokeh.plotting import figure, show, output_file
-from bokeh.layouts import gridplot
+from bokeh.layouts import gridplot, row, column
 from bokeh.io import curdoc
 from bokeh.models import ColumnDataSource
 from bokeh.plotting import figure, curdoc
@@ -187,14 +187,22 @@ def modify_doc(doc):
         period_diff={}
         for pos in time_data:
             if pos=='exp_period':continue
-            for time in range(len(time_data[pos])-1):
+            for time in range(len(time_data[pos])):
                 if time==0:continue
                 try:
-                    period_diff[time].append(-exp_period*time + time_data[pos][time])
+                    period_diff[time].append(time_data[pos][time] - exp_period*time -  time_data[pos][0])
                     #print('time ', time, ' exp_period*time ', exp_period*time, ' time_data[pos][time] ',time_data[pos][time])
                 except KeyError:
                     period_diff[time]=[]
-        print(period_diff)
+        print('period_diff ',period_diff)
+
+        period_mean = [0 for i in range(len(period_diff))]
+        time = [i*exp_period/60000. for i in range(len(period_diff))]
+        for p in period_diff:
+            period_mean[p]=np.mean(period_diff[p])/1000.
+
+        p_period = figure(width=300, height=300, title=f"period {pos}")
+        p_period.line(x=time, y=period_mean, line_color='blue')
 
 
         plots = []
@@ -213,6 +221,7 @@ def modify_doc(doc):
             p_img.grid.visible = False
 
             p_plot = figure(width=300, height=300, title=f"Intensity {pos}")
+
             for ch in data[pos]['intensities']:
                 if ch==1:  p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='blue')
                 elif ch==2:p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='black')
@@ -220,8 +229,10 @@ def modify_doc(doc):
             plots.append(p_img)
             plots.append(p_plot)
 
+
         grid = gridplot(plots, ncols=n_columns)
-        return grid
+        layout = column(p_period, grid)
+        return layout
 
     try:
         # Your Bokeh app code goes here, for example:
