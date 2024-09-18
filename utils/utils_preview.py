@@ -34,7 +34,7 @@ from bokeh.palettes import Greys256  # Grayscale palette
 import nest_asyncio
 
 import logging
-logging.basicConfig(level=logging.DEBUG)
+#logging.basicConfig(level=logging.DEBUG)
 
 nest_asyncio.apply()
 data={}
@@ -186,7 +186,7 @@ def process(file, low_crop, high_crop, model_detect, n=-9999):
 
 
 def modify_doc(doc):
-    print('time_data ',time_data)
+
 
     try:
         # Your Bokeh app code goes here, for example:
@@ -199,6 +199,9 @@ def modify_doc(doc):
 
 
 def create_bokeh_layout():
+
+    print('time_data ',time_data)
+    print('len(data) ',len(data))
 
     plots = []
     n_columns = 6
