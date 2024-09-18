@@ -214,11 +214,21 @@ def modify_doc(doc):
 
 
 def run_server():
-    server = Server({'/': modify_doc}, num_procs=1)
+    # Bind the server to localhost and allow access from the specified origin
+    server = Server({'/': modify_doc}, num_procs=1, port=5006, allow_websocket_origin=["localhost:5006"])
+
+    # Start the Bokeh server
     server.start()
+    
+    # Show the app in a new browser window
     server.io_loop.add_callback(server.show, "/")
-    # Do not start a new loop; just add a callback to run it
-    #server.io_loop.add_callback(server.stop)  # To stop gracefully after showing
+    
+    # Start the IOLoop without a conflict (since nest_asyncio is applied)
+    try:
+        server.io_loop.start()
+    except RuntimeError:
+        # If the loop is already running, continue without restarting it
+        pass
 
 
 
