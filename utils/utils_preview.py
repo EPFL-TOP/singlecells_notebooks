@@ -203,15 +203,18 @@ def modify_doc(doc):
         time = np.array(time)
         for p in period_diff:
             period_mean[p]=np.mean(period_diff[p])/1000.
-            period_mean[p]=np.mean(period_diff[p])/1000.
+            period_std[p]=np.std(period_diff[p])/1000.
 
         period_mean = np.array(period_mean)
+        period_std = np.array(period_std)
+
         p_period = figure(width=300, height=300, title=f"period {pos}")
         p_period.line(x=time, y=period_mean, line_color='blue')
         # Plot the error band (upper and lower bounds)
 
         x=np.hstack((time, time[::-1]))
         y=np.hstack((period_mean - period_std, (period_mean + period_std)[::-1]))
+
 
 
         source_period = ColumnDataSource(dict(x=x, y=y))
