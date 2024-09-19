@@ -201,19 +201,45 @@ def modify_doc(doc):
         period_mean = np.array(period_mean)
         period_std = np.array(period_std)
 
-        p_period = figure(width=500, height=400, title=f"Average deviation from expectations", x_axis_label='time [min]', y_axis_label='Deviation [sec]')
-        p_period.line(x=time, y=period_mean, line_color='blue')
-        # Plot the error band (upper and lower bounds)
-
-        x=np.hstack((time, time[::-1]))
-        y=np.hstack((period_mean - period_std, (period_mean + period_std)[::-1]))
-
-
-
-        source_period = ColumnDataSource(dict(x=x, y=y))
-        #p_period.patch(np.concatenate([time, time[::-1]]), np.concatenate([period_mean + period_std, (period_mean - period_std)[::-1]]), color='blue', alpha=0.2, legend_label="Error band")
+        p_period_vs_frame = figure(width=500, height=400, title=f"Average deviation from expectations", x_axis_label='time [min]', y_axis_label='Deviation [sec]')
+        p_period_vs_frame.line(x=time, y=period_mean, line_color='blue')
+        x_period_vs_frame=np.hstack((time, time[::-1]))
+        y_period_vs_frame=np.hstack((period_mean - period_std, (period_mean + period_std)[::-1]))
+        source_period_vs_frame = ColumnDataSource(dict(x=x_period_vs_frame, y=y_period_vs_frame))
         glyph = Patch(x="x", y="y", fill_color="#a6cee3", fill_alpha=0.3, line_color="#a6cee3", line_alpha=0.3)
-        p_period.add_glyph(source_period, glyph)
+        p_period_vs_frame.add_glyph(source_period_vs_frame, glyph)
+
+
+        period_diff={}
+        for pos in time_data:
+            if pos=='exp_period':continue
+            for time in range(len(time_data[pos])):
+                try:
+                    period_diff[pos].append(time_data[pos][time] - exp_period*time -  time_data[pos][0])
+                except KeyError:
+                    period_diff[pos]=[]
+                    period_diff[pos].append(time_data[pos][time] - exp_period*time -  time_data[pos][0])
+
+
+        period_mean = [0 for i in range(len(period_diff))]
+        period_std = [0 for i in range(len(period_diff))]
+        position = [i for i in range(len(period_diff))]
+        position = np.array(position)
+        for p in period_diff:
+            period_mean[p]=np.mean(period_diff[p])/1000.
+            period_std[p]=np.std(period_diff[p])/1000.
+
+        period_mean = np.array(period_mean)
+        period_std = np.array(period_std)
+
+        p_period_vs_pos = figure(width=500, height=400, title=f"Average deviation from expectations", x_axis_label='position', y_axis_label='Deviation [sec]')
+        p_period_vs_pos.line(x=time, y=period_mean, line_color='blue')
+        x_period_vs_pos=np.hstack((position, position[::-1]))
+        y_period_vs_pos=np.hstack((period_mean - period_std, (period_mean + period_std)[::-1]))
+        source_period_vs_pos = ColumnDataSource(dict(x=x_period_vs_pos, y=y_period_vs_pos))
+        glyph = Patch(x="x", y="y", fill_color="#a6cee3", fill_alpha=0.3, line_color="#a6cee3", line_alpha=0.3)
+        p_period_vs_frame.add_glyph(source_period_vs_pos, glyph)
+
 
 
         plots = []
@@ -241,7 +267,7 @@ def modify_doc(doc):
 
 
         grid = gridplot(plots, ncols=n_columns)
-        layout = column(p_period, grid)
+        layout = column(p_period_vs_frame, grid)
         return layout
 
     try:
