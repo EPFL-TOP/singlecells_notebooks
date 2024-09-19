@@ -180,7 +180,6 @@ def modify_doc(doc):
 
         exp_period=time_data['exp_period']
 
-        print('len time data ',len(time_data))
         period_diff={}
         for pos in time_data:
             if pos=='exp_period':continue
@@ -190,7 +189,6 @@ def modify_doc(doc):
                 except KeyError:
                     period_diff[time]=[]
                     period_diff[time].append(time_data[pos][time] - exp_period*time -  time_data[pos][0])
-        print('========================================period_diff ',period_diff)
 
         period_mean = [0 for i in range(len(period_diff))]
         period_std = [0 for i in range(len(period_diff))]
@@ -203,7 +201,7 @@ def modify_doc(doc):
         period_mean = np.array(period_mean)
         period_std = np.array(period_std)
 
-        p_period = figure(width=300, height=300, title=f"period {pos}")
+        p_period = figure(width=500, height=400, title=f"Average deviation from expectations", x_axis_label='time [min]', y_axis_label='Deviation [sec]')
         p_period.line(x=time, y=period_mean, line_color='blue')
         # Plot the error band (upper and lower bounds)
 
@@ -223,7 +221,6 @@ def modify_doc(doc):
         color_mapper = LinearColorMapper(palette=Greys256, low=0, high=255)  # Adjust low and high according to your data range
         for pos in data:
 
-            print(pos)
             image = data[pos]['img']
         
             p_img = figure(width=300, height=300, title=f"Image {pos}")
