@@ -233,12 +233,12 @@ def modify_doc(doc):
         period_std = np.array(period_std)
 
         p_period_vs_pos = figure(width=500, height=400, title=f"Average deviation from expectations", x_axis_label='position', y_axis_label='Deviation [sec]')
-        p_period_vs_pos.line(x=time, y=period_mean, line_color='blue')
+        p_period_vs_pos.line(x=position, y=period_mean, line_color='blue')
         x_period_vs_pos=np.hstack((position, position[::-1]))
         y_period_vs_pos=np.hstack((period_mean - period_std, (period_mean + period_std)[::-1]))
         source_period_vs_pos = ColumnDataSource(dict(x=x_period_vs_pos, y=y_period_vs_pos))
-        glyph = Patch(x="x", y="y", fill_color="#a6cee3", fill_alpha=0.3, line_color="#a6cee3", line_alpha=0.3)
-        p_period_vs_frame.add_glyph(source_period_vs_pos, glyph)
+        glyph2 = Patch(x="x", y="y", fill_color="#a6cee3", fill_alpha=0.3, line_color="#a6cee3", line_alpha=0.3)
+        p_period_vs_pos.add_glyph(source_period_vs_pos, glyph2)
 
 
 
@@ -267,7 +267,7 @@ def modify_doc(doc):
 
 
         grid = gridplot(plots, ncols=n_columns)
-        layout = column(p_period_vs_frame, p_period_vs_pos, grid)
+        layout = column(row(p_period_vs_frame, p_period_vs_pos), grid)
         return layout
 
     try:
