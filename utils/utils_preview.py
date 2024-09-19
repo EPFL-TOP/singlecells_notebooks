@@ -209,16 +209,16 @@ def modify_doc(doc):
         p_period = figure(width=300, height=300, title=f"period {pos}")
         p_period.line(x=time, y=period_mean, line_color='blue')
         # Plot the error band (upper and lower bounds)
-        print('time  ',np.concatenate([time, time[::-1]]))
-        print('period  ',np.concatenate([period_mean + period_std, (period_mean - period_std)[::-1]]))
 
         x=np.hstack((time, time[::-1]))
         y=np.hstack((period_mean + period_std, (period_mean - period_std)[::-1]]))
+
+
         source_period = ColumnDataSource(dict(x=x, y=y))
         #p_period.patch(np.concatenate([time, time[::-1]]), np.concatenate([period_mean + period_std, (period_mean - period_std)[::-1]]), color='blue', alpha=0.2, legend_label="Error band")
         glyph = Patch(x="x", y="y", fill_color="#a6cee3")
         p_period.add_glyph(source_period, glyph)
-
+        print('source_period ',source_period.data)
 
         plots = []
         n_columns = 6
