@@ -267,7 +267,7 @@ def modify_doc(doc):
 
 
         grid = gridplot(plots, ncols=n_columns)
-        layout = column(p_period_vs_frame, grid)
+        layout = column(p_period_vs_frame, p_period_vs_pos, grid)
         return layout
 
     try:
