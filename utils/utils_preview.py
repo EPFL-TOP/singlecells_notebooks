@@ -96,7 +96,8 @@ def get_timelaps(file):
 
     for pos in range(num_pos):
         time_data[pos]=[timesteps[num_pos*frame+pos] for frame in range(num_frames)]
-
+        for frame in range(num_frames):
+            print('--- ',num_pos*frame+pos)
 
 
 def preprocess_image_pytorch(image_array):
@@ -219,7 +220,7 @@ def modify_doc(doc):
 
         source_period = ColumnDataSource(dict(x=x, y=y))
         #p_period.patch(np.concatenate([time, time[::-1]]), np.concatenate([period_mean + period_std, (period_mean - period_std)[::-1]]), color='blue', alpha=0.2, legend_label="Error band")
-        glyph = Patch(x="x", y="y", fill_color="#a6cee3", fill_alpha=0.4)
+        glyph = Patch(x="x", y="y", fill_color="#a6cee3", fill_alpha=0.3, line_color="#a6cee3", line_alpha=0.3)
         p_period.add_glyph(source_period, glyph)
 
 
