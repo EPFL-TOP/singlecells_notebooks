@@ -211,7 +211,7 @@ def modify_doc(doc):
         # Plot the error band (upper and lower bounds)
 
         x=np.hstack((time, time[::-1]))
-        y=np.hstack((period_mean - period_std, (period_mean - period_std)[::-1]))
+        y=np.hstack((period_mean - period_std, (period_mean + period_std)[::-1]))
 
 
         source_period = ColumnDataSource(dict(x=x, y=y))
