@@ -218,6 +218,13 @@ def modify_doc(doc):
         #p_period.patch(np.concatenate([time, time[::-1]]), np.concatenate([period_mean + period_std, (period_mean - period_std)[::-1]]), color='blue', alpha=0.2, legend_label="Error band")
         glyph = Patch(x="x", y="y", fill_color="#a6cee3")
         p_period.add_glyph(source_period, glyph)
+
+        source = ColumnDataSource(dict(x=[0,200, 200, 0], y=[0,0,40,40]))
+        glyph2 = Patch(x="x", y="y", fill_color="#a6cee3")
+        p_period.add_glyph(source, glyph2)
+
+
+
         print('source_period ',source_period.data)
 
         plots = []
