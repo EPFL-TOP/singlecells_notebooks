@@ -46,9 +46,12 @@ def copy_files_with_verification(src_dir, dest_dir, algorithm='sha256', max_retr
     """
     Copy all files from src_dir to dest_dir and verify their checksums.
     """
+
     if not os.path.exists(dest_dir):
-        os.makedirs(dest_dir)
-    
+        print('Destination nas-rcp -->{}<-- not mounted'.format(dest_dir))
+        print('Please mount it first, and rerun. EXIT')
+        return
+
     head, exp_name = os.path.split(src_dir)
     print('exp_name, ',exp_name)
 

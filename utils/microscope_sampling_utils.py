@@ -103,7 +103,7 @@ def position_time_stamps(nd_path_split):
     return t_values_arr, t_values_expected_diff_woffset, t_values_succ_diff
 
 
-def position_time_stamps_batch(root_directory):
+def position_time_stamps_batch(root_directory, dev_value='percentage'):
     subdirectory_l = []
     for subdirectory in pathlib.Path(root_directory).iterdir():
         if subdirectory.is_dir():
@@ -115,10 +115,28 @@ def position_time_stamps_batch(root_directory):
                 subdirectory_l.append(subdirectory)
 
     for subdirectory in subdirectory_l:
+
         name = subdirectory.name
         path_l = [file for file in subdirectory.iterdir() if '.nd2' in file.as_posix()]
-        avg_t_values_exp = np.mean(np.asarray([position_time_stamps(p.as_posix())[1] for p in path_l]), axis=0)
-        avg_t_values_succ_diff = np.mean(np.asarray([position_time_stamps(p.as_posix())[2] for p in path_l]), axis=0)
+        expected_sampling = experiment_sampling_t(path_l[0].as_posix())[0]
+        # As absolute value in seconds
+        if dev_value == 'absolute':
+            avg_t_values_exp = np.mean(np.asarray([position_time_stamps(p.as_posix())[1] for p in path_l]), axis=0)
+            avg_t_values_succ_diff = np.mean(np.asarray([position_time_stamps(p.as_posix())[2] for p in path_l]),
+                                             axis=0)
+            y_label = 'Deviation (s)'
+
+        # As a percentage of the expected sampling time
+        elif dev_value == 'percentage':
+            avg_t_values_exp = np.mean(np.asarray([position_time_stamps(p.as_posix())[1] for p in path_l]),
+                                       axis=0) / expected_sampling * 100
+            avg_t_values_succ_diff = np.mean(np.asarray([position_time_stamps(p.as_posix())[2] for p in path_l]),
+                                             axis=0) / expected_sampling * 100
+            y_label = 'Deviation (%)'
+
+        else:
+            print('Not a valid deviation value selected')
+            return None
 
         # Plot
         plt.close('All')
@@ -129,13 +147,13 @@ def position_time_stamps_batch(root_directory):
         axes[0].plot(avg_t_values_exp)
         axes[0].set_title('Average deviation from expected value')
         axes[0].set_xlabel('Time frame')
-        axes[0].set_ylabel('Deviation (s)')
+        axes[0].set_ylabel(y_label)
 
         # avg_t_values_succ_diff
         axes[1].plot(avg_t_values_succ_diff)
         axes[1].set_title('Average successive differences of deviations')
         axes[1].set_xlabel('Time frame')
-        axes[1].set_ylabel('Deviation (s)')
+        axes[1].set_ylabel(y_label)
 
         plt.tight_layout()
         plt.show()

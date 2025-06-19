@@ -1,6 +1,8 @@
 import os
 import numpy  as np
 import nd2
+import nd2reader as nd2reader
+
 from pathlib import Path
 from skimage.filters import threshold_triangle, gaussian
 from skimage.morphology import binary_opening, disk, binary_closing, white_tophat
@@ -20,16 +22,24 @@ from torchvision import models
 
 
 from bokeh.plotting import figure, show, output_file
-from bokeh.layouts import gridplot
+from bokeh.layouts import gridplot, row, column
 from bokeh.io import curdoc
-from bokeh.models import ColumnDataSource
+from bokeh.models import ColumnDataSource, Patch
 from bokeh.plotting import figure, curdoc
 from bokeh.server.server import Server
 from bokeh.models import LinearColorMapper, ColorBar
 from bokeh.transform import linear_cmap
 from bokeh.palettes import Greys256  # Grayscale palette
 
+import nest_asyncio
+
+import logging
+#logging.basicConfig(level=logging.DEBUG)
+
+nest_asyncio.apply()
 data={}
+time_data={}
+
 model_detect = None
 
 class ToTensorNormalize:
@@ -65,14 +75,39 @@ def load_model_detect(model_path, num_classes):
 
 
 
+def get_timelaps(file):
+    current_file=os.path.join(file)
+    time_lapse_path = Path(current_file)
+    f = nd2.ND2File(time_lapse_path.as_posix())
+    exp_period = f.experiment[0].parameters.durationMs/(f.experiment[0].count-1)
+    f.close()
+
+    stack = nd2reader.reader.ND2Reader(time_lapse_path.as_posix())
+    metadata = stack.metadata
+    num_frames = metadata['num_frames']
+    num_pos = len(metadata["fields_of_view"])
+
+    if num_pos*num_frames != len(metadata["z_coordinates"]):
+        print('ERROR DIFFERENT NUMBER OF frames')
+
+    timesteps = stack.timesteps.tolist()
+
+    time_data['exp_period']=exp_period
+
+    for pos in range(num_pos):
+        time_data[pos]=[timesteps[num_pos*frame+pos] for frame in range(num_frames)]
+
+
 def preprocess_image_pytorch(image_array):
     transform = ToTensorNormalize()
     image = transform(image_array)
     return image.unsqueeze(0)  # Add batch dimension
 
 
-def process(file, low_crop, high_crop, model_detect):
+def process(file, low_crop, high_crop, model_detect, n=-9999):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    get_timelaps(file)
+
     current_file=os.path.join(file)
     time_lapse_path = Path(current_file)
     print('time_lapse_path = ',time_lapse_path)
@@ -81,8 +116,8 @@ def process(file, low_crop, high_crop, model_detect):
 
     print(time_lapse.shape)#(81=t, 110=pos, 3, 512, 512)
 
-
     for pos_id, pos in enumerate(time_lapse):
+        if n>0 and n==pos_id:break
         pos = pos.transpose(1,0,2,3)
         BF_images = pos[0]
 
@@ -120,7 +155,8 @@ def process(file, low_crop, high_crop, model_detect):
                 time=[]
                 for ch_id, ch_img in enumerate(pos):
                     if ch_id == 0:
-                        time=[i for i in range(len(ch_img))]
+                        #time=[i for i in range(len(ch_img))]
+                        time=[t/60000. for t in time_data[pos_id]]
                         time=np.array(time)
                         continue
                     intensities[ch_id]=[]
@@ -140,38 +176,129 @@ def process(file, low_crop, high_crop, model_detect):
 
 def modify_doc(doc):
 
-    plots = []
-    n_columns = 6
-    color_mapper = LinearColorMapper(palette=Greys256, low=0, high=255)  # Adjust low and high according to your data range
-    for pos in data:
+    def create_bokeh_layout():
 
-        print(pos)
-        image = data[pos]['img']
-    
-        p_img = figure(width=300, height=300, title=f"Image {pos}")
-        p_img.image(image=[image], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
-        p_img.axis.visible = False
-        p_img.grid.visible = False
-        p_img.axis.visible = False
-        p_img.grid.visible = False
+        exp_period=time_data['exp_period']
 
-        p_plot = figure(width=300, height=300, title=f"Intensity {pos}")
-        for ch in data[pos]['intensities']:
-            if ch==1:  p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='blue')
-            elif ch==2:p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='black')
+        period_diff={}
+        for pos in time_data:
+            if pos=='exp_period':continue
+            for time in range(len(time_data[pos])):
+                try:
+                    period_diff[time].append(time_data[pos][time] - exp_period*time -  time_data[pos][0])
+                except KeyError:
+                    period_diff[time]=[]
+                    period_diff[time].append(time_data[pos][time] - exp_period*time -  time_data[pos][0])
 
-        plots.append(p_img)
-        plots.append(p_plot)
+        period_mean = [0 for i in range(len(period_diff))]
+        period_std = [0 for i in range(len(period_diff))]
+        time = [i*exp_period/60000. for i in range(len(period_diff))]
+        time = np.array(time)
+        for p in period_diff:
+            period_mean[p]=np.mean(period_diff[p])/1000.
+            period_std[p]=np.std(period_diff[p])/1000.
 
-    grid = gridplot(plots, ncols=n_columns)
+        period_mean = np.array(period_mean)
+        period_std = np.array(period_std)
 
-    doc.add_root(grid)
+        p_period_vs_frame = figure(width=500, height=400, title=f"Average deviation from expectations", x_axis_label='time [min]', y_axis_label='Deviation [sec]')
+        p_period_vs_frame.line(x=time, y=period_mean, line_color='blue')
+        x_period_vs_frame=np.hstack((time, time[::-1]))
+        y_period_vs_frame=np.hstack((period_mean - period_std, (period_mean + period_std)[::-1]))
+        source_period_vs_frame = ColumnDataSource(dict(x=x_period_vs_frame, y=y_period_vs_frame))
+        glyph = Patch(x="x", y="y", fill_color="#a6cee3", fill_alpha=0.3, line_color="#a6cee3", line_alpha=0.3)
+        p_period_vs_frame.add_glyph(source_period_vs_frame, glyph)
+
+
+        period_diff={}
+        for pos in time_data:
+            if pos=='exp_period':continue
+            for time in range(len(time_data[pos])):
+                try:
+                    period_diff[pos].append(time_data[pos][time] - exp_period*time -  time_data[pos][0])
+                except KeyError:
+                    period_diff[pos]=[]
+                    period_diff[pos].append(time_data[pos][time] - exp_period*time -  time_data[pos][0])
+
+
+        period_mean = [0 for i in range(len(period_diff))]
+        period_std = [0 for i in range(len(period_diff))]
+        position = [i for i in range(len(period_diff))]
+        position = np.array(position)
+        for p in period_diff:
+            period_mean[p]=np.mean(period_diff[p])/1000.
+            period_std[p]=np.std(period_diff[p])/1000.
+
+        period_mean = np.array(period_mean)
+        period_std = np.array(period_std)
+
+        p_period_vs_pos = figure(width=500, height=400, title=f"Average deviation from expectations", x_axis_label='position', y_axis_label='Deviation [sec]')
+        p_period_vs_pos.line(x=position, y=period_mean, line_color='blue')
+        x_period_vs_pos=np.hstack((position, position[::-1]))
+        y_period_vs_pos=np.hstack((period_mean - period_std, (period_mean + period_std)[::-1]))
+        source_period_vs_pos = ColumnDataSource(dict(x=x_period_vs_pos, y=y_period_vs_pos))
+        glyph2 = Patch(x="x", y="y", fill_color="#a6cee3", fill_alpha=0.3, line_color="#a6cee3", line_alpha=0.3)
+        p_period_vs_pos.add_glyph(source_period_vs_pos, glyph2)
+
+
+
+        plots = []
+        n_columns = 6
+        color_mapper = LinearColorMapper(palette=Greys256, low=0, high=255)  # Adjust low and high according to your data range
+        for pos in data:
+
+            image = data[pos]['img']
+        
+            p_img = figure(width=300, height=300, title=f"Image {pos}")
+            p_img.image(image=[image], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
+            p_img.axis.visible = False
+            p_img.grid.visible = False
+            p_img.axis.visible = False
+            p_img.grid.visible = False
+
+            p_plot = figure(width=300, height=300, title=f"Intensity {pos}")
+
+            for ch in data[pos]['intensities']:
+                if ch==1:  p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='blue')
+                elif ch==2:p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='black')
+
+            plots.append(p_img)
+            plots.append(p_plot)
+
+
+        grid = gridplot(plots, ncols=n_columns)
+        layout = column(row(p_period_vs_frame, p_period_vs_pos), grid)
+        return layout
+
+    try:
+        # Your Bokeh app code goes here, for example:
+        layout = create_bokeh_layout()  # Make sure this function works as expected
+        doc.add_root(layout)
+        logging.info("App loaded successfully.")
+    except Exception as e:
+        logging.error(f"Error in modify_doc: {e}", exc_info=True)
+
+
 
 def run_server():
-    server = Server({'/': modify_doc}, num_procs=1)
+    # Bind the server to localhost and allow access from the specified origin
+    server = Server({'/': modify_doc}, num_procs=1, port=5006, allow_websocket_origin=["localhost:5006"])
+
+    # Start the Bokeh server
     server.start()
+    
+    # Show the app in a new browser window
     server.io_loop.add_callback(server.show, "/")
-    server.io_loop.start()
+    
+    # Start the IOLoop without a conflict (since nest_asyncio is applied)
+    try:
+        server.io_loop.start()
+    except RuntimeError:
+        # If the loop is already running, continue without restarting it
+        print('loop is already running')
+        pass
+        
+
 
 
 
