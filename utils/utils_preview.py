@@ -34,6 +34,8 @@ from bokeh.palettes import Greys256  # Grayscale palette
 import nest_asyncio
 
 import logging
+from aicspylibczi import CziFile
+
 #logging.basicConfig(level=logging.DEBUG)
 
 nest_asyncio.apply()
@@ -102,6 +104,92 @@ def preprocess_image_pytorch(image_array):
     transform = ToTensorNormalize()
     image = transform(image_array)
     return image.unsqueeze(0)  # Add batch dimension
+
+
+def process_czi_image(image, low_crop, high_crop, model_detect, n=-9999, show=False):
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    image_prepro = preprocess_image_pytorch(image).to(device)
+    with torch.no_grad():
+        predictions = model_detect(image_prepro)
+        if show:
+            print(predictions)
+            fig, ax =plt.subplots()
+            ax.imshow(image, cmap="gray")
+        for idx, box in enumerate(predictions[0]['boxes']):
+            x_min, y_min, x_max, y_max = box.cpu().numpy()
+            if float(predictions[0]['scores'][idx].cpu().numpy())<0.8:continue
+            if (x_max-x_min)*(y_max-y_min)<150:continue
+            if show:
+                rect = patches.Rectangle((x_min, y_min), x_max - x_min, y_max - y_min, linewidth=1, edgecolor='white', facecolor='none')
+                ax.add_patch(rect)
+        if show:
+            plt.show()
+
+def process_czi(file, low_crop, high_crop, model_detect, seg_chan=2, n=-9999):
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    czi  = CziFile(file)
+    dims = czi.get_dims_shape()
+    n_cells = len(dims)
+    print('N cells ',n_cells)
+
+    for s in range(len(dims)):
+        print(dims[s])
+        n_time=dims[s]["T"][1]
+        n_ch=dims[s]["C"][1]
+        print('processing scene ',s, '  ntime=',n_time, '  nchannels=',n_ch)
+        img_t0, dim_t0 = czi.read_image(S=s,T=0,C=seg_chan)
+        img_t0 = img_t0.squeeze()
+        image_prepro = preprocess_image_pytorch(img_t0).to(device)
+        with torch.no_grad():
+            predictions = model_detect(image_prepro)
+            print(predictions)
+            for idx, box in enumerate(predictions[0]['boxes']):
+                x_min, y_min, x_max, y_max = box.cpu().numpy()
+                if float(predictions[0]['scores'][idx].cpu().numpy())<0.8:continue
+                if (x_max-x_min)*(y_max-y_min)<150:continue
+                data['pos{}_cell{}'.format(s,idx)]={}
+                center = (x_min+(x_max-x_min)/2.,y_min+(y_max-y_min)/2.) 
+
+                image=img_t0[int(y_min*low_crop):int(y_max*high_crop), int(x_min*low_crop):int(x_max*high_crop)]
+                max_value = np.max(image)
+                min_value = np.min(image)
+                intensity_normalized = (image - min_value)/(max_value-min_value)*255
+                intensity_normalized = intensity_normalized.astype(np.uint8)
+                data['pos{}_cell{}'.format(s,idx)]['img']=intensity_normalized
+                print('=========== ','pos{}_cell{}'.format(s,idx))
+
+
+                intensities={}
+                time=[]
+
+
+                for ch in range(n_ch):
+                    if ch==seg_chan:
+                        time=[t for t in range(n_time)]
+                        time=np.array(time)
+                        continue
+                    else:
+                        intensities[ch]=[]
+                        arr_t, dim_t=czi.read_image(S=s,C=ch, core=10)
+                        image_t = arr_t.squeeze()
+                        print('----------------',image_t.shape)
+                        for t in range(n_time):
+                            intensities[ch].append(image_t[t][int(y_min*low_crop):int(y_max*high_crop), int(x_min*low_crop):int(x_max*high_crop)].max())
+
+                for ch in intensities:
+                    intensities[ch]=np.array(intensities[ch])
+                    max_value = np.max(intensities[ch])
+                    min_value = np.min(intensities[ch])
+                    intensity_normalized = (intensities[ch] - min_value)/(max_value-min_value)
+                    intensities[ch]=intensity_normalized
+                    if ch==1:intensities[ch]=intensity_normalized+1
+                data['pos{}_cell{}'.format(s,idx)]['time']=time
+                data['pos{}_cell{}'.format(s,idx)]['intensities']=intensities
+        #if s==5:break
+    del czi
+
+          
+
 
 
 def process(file, low_crop, high_crop, model_detect, n=-9999):
@@ -173,6 +261,45 @@ def process(file, low_crop, high_crop, model_detect, n=-9999):
                 data['pos{}_cell{}'.format(pos_id,idx)]['intensities']=intensities
     del time_lapse
 
+def modify_doc_czi(doc):
+
+    def create_bokeh_layout_czi():
+
+        plots = []
+        n_columns = 6
+        color_mapper = LinearColorMapper(palette=Greys256, low=0, high=255)  # Adjust low and high according to your data range
+        for pos in data:
+
+            image = data[pos]['img']
+        
+            p_img = figure(width=300, height=300, title=f"Image {pos}")
+            p_img.image(image=[image], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
+            p_img.axis.visible = False
+            p_img.grid.visible = False
+            p_img.axis.visible = False
+            p_img.grid.visible = False
+
+            p_plot = figure(width=300, height=300, title=f"Intensity {pos}")
+
+            for ch in data[pos]['intensities']:
+                if ch==0:  p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='blue')
+                elif ch==1:p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='black')
+
+            plots.append(p_img)
+            plots.append(p_plot)
+
+
+        grid = gridplot(plots, ncols=n_columns)
+        layout = column(grid)
+        return layout
+
+    try:
+        # Your Bokeh app code goes here, for example:
+        layout = create_bokeh_layout_czi()  # Make sure this function works as expected
+        doc.add_root(layout)
+        logging.info("App loaded successfully.")
+    except Exception as e:
+        logging.error(f"Error in modify_doc: {e}", exc_info=True)
 
 def modify_doc(doc):
 
@@ -299,6 +426,23 @@ def run_server():
         pass
         
 
+def run_server_czi():
+    # Bind the server to localhost and allow access from the specified origin
+    server = Server({'/': modify_doc_czi}, num_procs=1, port=5010, allow_websocket_origin=["localhost:5010"])
+
+    # Start the Bokeh server
+    server.start()
+    
+    # Show the app in a new browser window
+    server.io_loop.add_callback(server.show, "/")
+    
+    # Start the IOLoop without a conflict (since nest_asyncio is applied)
+    try:
+        server.io_loop.start()
+    except RuntimeError:
+        # If the loop is already running, continue without restarting it
+        print('loop is already running')
+        pass
 
 
 
