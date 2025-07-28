@@ -249,7 +249,9 @@ def process(file, low_crop, high_crop, model_detect, n=-9999):
                         continue
                     intensities[ch_id]=[]
                     for img in ch_img:
-                        intensities[ch_id].append(img[int(y_min*low_crop):int(y_max*high_crop), int(x_min*low_crop):int(x_max*high_crop)].max())
+                        value=img[int(y_min*low_crop):int(y_max*high_crop), int(x_min*low_crop):int(x_max*high_crop)].max()
+                        if value/65536>0.8:intensities[ch_id].append(intensities[ch_id][-1])
+                        else:intensities[ch_id].append(value)
                 for ch in intensities:
                     intensities[ch]=np.array(intensities[ch])
                     max_value = np.max(intensities[ch])
