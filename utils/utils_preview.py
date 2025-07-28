@@ -192,7 +192,7 @@ def process_czi(file, low_crop, high_crop, model_detect, seg_chan=2, n=-9999):
 
 
 
-def process(file, low_crop, high_crop, model_detect, n=-9999):
+def process(file, low_crop, high_crop, model_detect, n=-9999, max_factor=1.5):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     get_timelaps(file)
 
@@ -249,9 +249,15 @@ def process(file, low_crop, high_crop, model_detect, n=-9999):
                         continue
                     intensities[ch_id]=[]
                     for img in ch_img:
-                        value=img[int(y_min*low_crop):int(y_max*high_crop), int(x_min*low_crop):int(x_max*high_crop)].max()
-                        if value/65536>0.8:intensities[ch_id].append(intensities[ch_id][-1])
-                        else:intensities[ch_id].append(value)
+                        max_int = img[int(y_min*low_crop):int(y_max*high_crop), int(x_min*low_crop):int(x_max*high_crop)].max()
+
+                        if max_int/65536>0.8:
+                            intensities[ch_id].append(intensities[ch_id][-1])
+                        elif max_int>intensities[ch_id][-1]*max_factor: 
+                            intensities[ch_id].append(intensities[ch_id][-1])
+                        else:
+                            intensities[ch_id].append(max_int)
+
                 for ch in intensities:
                     intensities[ch]=np.array(intensities[ch])
                     max_value = np.max(intensities[ch])
