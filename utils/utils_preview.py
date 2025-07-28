@@ -131,11 +131,12 @@ def process_czi(file, low_crop, high_crop, model_detect, seg_chan=2, n=-9999):
     dims = czi.get_dims_shape()
     n_cells = len(dims)
     print('N cells ',n_cells)
-
-    for s in range(len(dims)):
-        print(dims[s])
-        n_time=dims[s]["T"][1]
-        n_ch=dims[s]["C"][1]
+    if n_cells==1:
+        n_cells=dims[0]['S'][1]
+    for s in range(n_cells):
+        #print(dims[s])
+        n_time=dims[0]["T"][1]
+        n_ch=dims[0]["C"][1]
         print('processing scene ',s, '  ntime=',n_time, '  nchannels=',n_ch)
         img_t0, dim_t0 = czi.read_image(S=s,T=0,C=seg_chan)
         img_t0 = img_t0.squeeze()
