@@ -25,6 +25,7 @@ from bokeh.plotting import figure, show, output_file
 from bokeh.layouts import gridplot, row, column
 from bokeh.io import curdoc
 from bokeh.models import ColumnDataSource, Patch
+from bokeh.models import CheckboxGroup, Div, Button, Tabs, TabPanel
 from bokeh.plotting import figure, curdoc
 from bokeh.server.server import Server
 from bokeh.models import LinearColorMapper, ColorBar
@@ -242,32 +243,107 @@ def modify_doc(doc):
 
 
 
-        plots = []
+        # ---- group the detected cells by their position ----------------------
+        def _pos_cell(key):
+            # keys look like 'pos{pos_id}_cell{idx}'
+            pos_part, cell_part = key.split('_')
+            return int(pos_part[3:]), int(cell_part[4:])
+
+        cells_by_pos = {}
+        for key in data:
+            if 'img' not in data[key]:
+                continue
+            pos_id, _ = _pos_cell(key)
+            cells_by_pos.setdefault(pos_id, []).append(key)
+
+        ordered_positions = sorted(cells_by_pos)
+
+        # two alternating colours so neighbouring positions are visually distinct
+        band_colors = ["#1f77b4", "#ff7f0e"]   # strong colour for the header band
+        tint_colors = ["#eaf2fb", "#fff3e6"]   # matching light figure background
+
+        # ---- state shared with the "Selected positions" tab ------------------
+        selected_positions = set()
+        selected_div = Div(text="<b>No position selected yet.</b>", width=500)
+
+        def refresh_selected():
+            if selected_positions:
+                items = "".join(
+                    f"<li>position <b>{p}</b> &nbsp;({len(cells_by_pos[p])} cells)</li>"
+                    for p in sorted(selected_positions))
+                selected_div.text = (
+                    f"<b>{len(selected_positions)} position(s) kept:</b>"
+                    f"<ul>{items}</ul>")
+            else:
+                selected_div.text = "<b>No position selected yet.</b>"
+
+        def make_checkbox_callback(pos_id):
+            def _cb(attr, old, new):
+                if new:                       # non-empty active list -> ticked
+                    selected_positions.add(pos_id)
+                else:
+                    selected_positions.discard(pos_id)
+                refresh_selected()
+            return _cb
+
+        # ---- build one colour-coded block per position -----------------------
         n_columns = 6
         color_mapper = LinearColorMapper(palette=Greys256, low=0, high=255)  # Adjust low and high according to your data range
-        for pos in data:
 
-            image = data[pos]['img']
-        
-            p_img = figure(width=300, height=300, title=f"Image {pos}")
-            p_img.image(image=[image], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
-            p_img.axis.visible = False
-            p_img.grid.visible = False
-            p_img.axis.visible = False
-            p_img.grid.visible = False
+        position_blocks = []
+        for order_idx, pos_id in enumerate(ordered_positions):
+            tint = tint_colors[order_idx % 2]
+            band = band_colors[order_idx % 2]
 
-            p_plot = figure(width=300, height=300, title=f"Intensity {pos}")
+            cell_plots = []
+            for key in cells_by_pos[pos_id]:
+                _, cell_idx = _pos_cell(key)
+                image = data[key]['img']
 
-            for ch in data[pos]['intensities']:
-                if ch==1:  p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='blue')
-                elif ch==2:p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='black')
+                p_img = figure(width=300, height=300, title=f"img cell {cell_idx}")
+                p_img.image(image=[image], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
+                p_img.axis.visible = False
+                p_img.grid.visible = False
+                p_img.background_fill_color = tint
+                p_img.border_fill_color = tint
 
-            plots.append(p_img)
-            plots.append(p_plot)
+                p_plot = figure(width=300, height=300, title=f"intensity cell {cell_idx}")
+                for ch in data[key]['intensities']:
+                    if ch == 1:  p_plot.line(x=data[key]['time'], y=data[key]['intensities'][ch], line_color='blue')
+                    elif ch == 2: p_plot.line(x=data[key]['time'], y=data[key]['intensities'][ch], line_color='black')
+                p_plot.background_fill_color = tint
+                p_plot.border_fill_color = tint
 
+                cell_plots.append(p_img)
+                cell_plots.append(p_plot)
 
-        grid = gridplot(plots, ncols=n_columns)
-        layout = column(row(p_period_vs_frame, p_period_vs_pos), grid)
+            grid = gridplot(cell_plots, ncols=n_columns)
+
+            header = Div(
+                text=(f"<div style='background:{band}; color:white; padding:4px 10px; "
+                      f"font-weight:bold; border-radius:4px;'>Position {pos_id} "
+                      f"&nbsp;&middot;&nbsp; {len(cells_by_pos[pos_id])} cells</div>"),
+                width=300)
+            keep_cb = CheckboxGroup(labels=[f"keep position {pos_id}"], active=[])
+            keep_cb.on_change('active', make_checkbox_callback(pos_id))
+
+            position_blocks.append(column(row(header, keep_cb), grid))
+
+        cells_layout = column(*position_blocks)
+
+        # ---- "Selected positions" tab ---------------------------------------
+        print_button = Button(label="Print kept positions to notebook",
+                              button_type="primary", width=250)
+        def _print_kept():
+            print("kept positions:", sorted(selected_positions))
+        print_button.on_click(_print_kept)
+
+        tabs = Tabs(tabs=[
+            TabPanel(child=cells_layout, title="Cells by position"),
+            TabPanel(child=column(selected_div, print_button), title="Selected positions"),
+        ])
+
+        layout = column(row(p_period_vs_frame, p_period_vs_pos), tabs)
         return layout
 
     try:
