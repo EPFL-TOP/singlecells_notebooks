@@ -1,5 +1,6 @@
 import os
 import csv
+import threading
 import numpy  as np
 import nd2
 import nd2reader as nd2reader
@@ -281,6 +282,235 @@ def process(file, low_crop, high_crop, model_detect, n=-9999, max_factor=1.5, ve
         print('[nd2] pos {}: {} cells'.format(pos_id, n_kept))
     del time_lapse
 
+
+# ====================== lazy / streaming nd2 reading ========================
+# `process()` above loads the whole file with nd2.imread (all positions/times in
+# RAM at once). The helpers below instead read ONE position at a time via dask,
+# so they scale to very large (100+ GB) files.
+
+def _position_dim(dims):
+    """Return the name of the multi-position axis in an nd2 xarray, or None."""
+    for cand in ('P', 'S', 'M', 'Position', 'position', 'points'):
+        if cand in dims:
+            return cand
+    return None
+
+
+def _read_position_block(xarr, pos_dim, pos_id):
+    """Lazily read a single position and return it as a (T, C, Y, X) numpy array.
+
+    Only this position is pulled into memory (a few hundred MB), never the whole
+    file. Any stray axis (e.g. a Z stack) is reduced to its first index."""
+    sub = xarr.isel({pos_dim: pos_id}) if pos_dim is not None else xarr
+    for d in list(sub.dims):                 # drop anything that is not T/C/Y/X
+        if d not in ('T', 'C', 'Y', 'X'):
+            sub = sub.isel({d: 0})
+    for d in ('T', 'C'):                      # guarantee a time and a channel axis exist
+        if d not in sub.dims:
+            sub = sub.expand_dims(d)
+    sub = sub.transpose('T', 'C', 'Y', 'X')
+    return np.asarray(sub.to_numpy())
+
+
+def _detect_and_store(block, pos_id, low_crop, high_crop, model_detect, device,
+                      max_factor=1.5, time_minutes=None):
+    """Detect cells in one position block (T, C, Y, X) and store them in `data`.
+
+    Channel 0 is bright-field (used for detection and the thumbnail); channels
+    >= 1 are fluorescence channels whose per-cell max intensity is tracked over
+    time. Returns the number of cells kept. Mirrors `process()`'s semantics but
+    is safe on the first frame (the original indexed an empty list)."""
+    n_time, n_ch = block.shape[0], block.shape[1]
+    bf_t0 = block[0, 0]                       # bright-field, first timepoint
+
+    image_prepro = preprocess_image_pytorch(bf_t0).to(device)
+    n_kept = 0
+    with torch.no_grad():
+        predictions = model_detect(image_prepro)
+        for idx, box in enumerate(predictions[0]['boxes']):
+            x_min, y_min, x_max, y_max = box.cpu().numpy()
+            if float(predictions[0]['scores'][idx].cpu().numpy()) < 0.8:
+                continue
+            if (x_max - x_min) * (y_max - y_min) < 150:
+                continue
+
+            y0, y1 = int(y_min * low_crop), int(y_max * high_crop)
+            x0, x1 = int(x_min * low_crop), int(x_max * high_crop)
+
+            key = 'pos{}_cell{}'.format(pos_id, idx)
+            data[key] = {}
+
+            crop = bf_t0[y0:y1, x0:x1]
+            mn, mx = float(np.min(crop)), float(np.max(crop))
+            if mx > mn:
+                thumb = ((crop - mn) / (mx - mn) * 255).astype(np.uint8)
+            else:
+                thumb = np.zeros_like(crop, dtype=np.uint8)
+            data[key]['img'] = thumb
+
+            intensities = {}
+            for ch in range(1, n_ch):
+                series = []
+                for t in range(n_time):
+                    v = float(block[t, ch, y0:y1, x0:x1].max())
+                    if series:                # carry previous value on saturation / spikes
+                        prev_v = series[-1]
+                        if v / 65536. > 0.8 or v > prev_v * max_factor:
+                            v = prev_v
+                    series.append(v)
+                series = np.array(series, dtype=float)
+                smn, smx = series.min(), series.max()
+                series = (series - smn) / (smx - smn) if smx > smn else series * 0.
+                if ch == 2:
+                    series = series + 1       # vertical offset so the 2nd channel is readable
+                intensities[ch] = series
+
+            data[key]['time'] = (np.array(time_minutes) if time_minutes is not None
+                                 else np.arange(n_time))
+            data[key]['intensities'] = intensities
+            n_kept += 1
+    return n_kept
+
+
+def _open_nd2_lazy(file, verbose=False):
+    """Open an nd2 as a lazy (dask-backed) xarray. Returns (file_handle, xarr,
+    pos_dim, n_pos). Caller must close the handle."""
+    f = nd2.ND2File(Path(os.path.join(file)).as_posix())
+    xarr = f.to_xarray(delayed=True, squeeze=True)
+    if verbose:
+        print('nd2 sizes:', dict(f.sizes), '| xarray dims:', tuple(xarr.dims))
+    pos_dim = _position_dim(xarr.dims)
+    n_pos = int(xarr.sizes[pos_dim]) if pos_dim is not None else 1
+    return f, xarr, pos_dim, n_pos
+
+
+def process_lazy(file, low_crop, high_crop, model_detect, n=-9999, max_factor=1.5, verbose=False):
+    """Memory-light drop-in replacement for `process()`.
+
+    Reads the nd2 one position at a time (via ``ND2File.to_xarray(delayed=True)``)
+    instead of loading the whole file, so it works on very large files. Fills the
+    same global `data` / `time_data` dicts, so `run_server()` displays the result
+    unchanged. For live display while reading, use `run_server_stream()` instead."""
+    global source_file
+    source_file = file
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    get_timelaps(file)
+
+    f, xarr, pos_dim, n_pos = _open_nd2_lazy(file, verbose=verbose)
+    try:
+        for pos_id in range(n_pos):
+            if n > 0 and pos_id >= n:
+                break
+            block = _read_position_block(xarr, pos_dim, pos_id)
+            tmin = [t / 60000. for t in time_data.get(pos_id, [])] or None
+            n_kept = _detect_and_store(block, pos_id, low_crop, high_crop,
+                                       model_detect, device, max_factor, tmin)
+            del block
+            print('[nd2] pos {}: {} cells'.format(pos_id, n_kept))
+    finally:
+        f.close()
+
+# ============================ dashboard building ============================
+# alternating colours so neighbouring positions are visually distinct
+_BAND_COLORS = ["#1f77b4", "#ff7f0e"]   # strong colour for the header band
+_TINT_COLORS = ["#eaf2fb", "#fff3e6"]   # matching light figure background
+_LINE_COLORS = ['blue', 'black', 'green', 'red', 'purple']
+
+
+def _pos_cell(key):
+    # keys look like 'pos{pos_id}_cell{idx}'
+    pos_part, cell_part = key.split('_')
+    return int(pos_part[3:]), int(cell_part[4:])
+
+
+def _group_cells_by_pos():
+    """Group the keys of the global `data` dict by position id. Iterates a
+    snapshot of the keys so it is safe to call while a background worker is still
+    adding cells."""
+    cells_by_pos = {}
+    for key in list(data):
+        if 'img' not in data[key]:
+            continue
+        pos_id, _ = _pos_cell(key)
+        cells_by_pos.setdefault(pos_id, []).append(key)
+    return cells_by_pos
+
+
+def _make_position_card(order_idx, pos_id, cells_by_pos, ctx):
+    """Build one bordered, colour-coded card holding every cell of a position.
+
+    ``ctx`` carries the per-dashboard shared state: ``fig_size`` (mutable dict
+    used by the zoom buttons), ``color_mapper``, ``all_figs`` (list every figure
+    is registered in), ``selected_positions`` and ``on_keep`` (checkbox callback
+    factory)."""
+    tint = _TINT_COLORS[order_idx % 2]
+    band = _BAND_COLORS[order_idx % 2]
+    fig_size = ctx['fig_size']
+    color_mapper = ctx['color_mapper']
+
+    cell_units = []
+    for key in cells_by_pos[pos_id]:
+        _, cell_idx = _pos_cell(key)
+
+        p_img = figure(width=fig_size['v'], height=fig_size['v'],
+                       title=f"cell {cell_idx}", toolbar_location=None)
+        p_img.image(image=[data[key]['img']], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
+        p_img.axis.visible = False
+        p_img.grid.visible = False
+        p_img.background_fill_color = tint
+        p_img.border_fill_color = tint
+
+        p_plot = figure(width=fig_size['v'], height=fig_size['v'], toolbar_location=None)
+        ints = data[key].get('intensities', {})
+        for i, ch in enumerate(sorted(ints)):
+            p_plot.line(x=data[key]['time'], y=ints[ch],
+                        line_color=_LINE_COLORS[i % len(_LINE_COLORS)])
+        p_plot.background_fill_color = tint
+        p_plot.border_fill_color = tint
+
+        ctx['all_figs'].append(p_img)
+        ctx['all_figs'].append(p_plot)
+        cell_units.append(column(p_img, p_plot))   # image stacked over its intensity plot
+
+    header = Div(
+        text=(f"<div style='background:{band}; color:white; padding:3px 10px; "
+              f"font-weight:bold; border-radius:4px;'>Position {pos_id} "
+              f"&middot; {len(cells_by_pos[pos_id])} cells</div>"),
+        width=max(150, fig_size['v']))
+    keep_cb = CheckboxGroup(labels=[f"keep position {pos_id}"],
+                            active=[0] if pos_id in ctx['selected_positions'] else [])
+    keep_cb.on_change('active', ctx['on_keep'](pos_id))
+
+    # the whole card is boxed and tinted so it is unambiguous which label /
+    # checkbox belongs to which set of cells
+    return column(
+        row(header, keep_cb),
+        row(*cell_units),
+        styles={'border': f'2px solid {band}', 'border-radius': '8px',
+                'padding': '6px', 'margin': '6px', 'background': tint},
+    )
+
+
+def _pack_position_cards(position_ids, cells_by_pos, ctx, color_index=None):
+    """Pack positions onto rows, never splitting a position, up to
+    ``ctx['max_cells_per_row']`` cells per row. ``color_index`` maps a position
+    id to the index used for its alternating colour (keeps the colour stable
+    across pages); defaults to the enumeration order."""
+    rows, current, count = [], [], 0
+    mcr = ctx['max_cells_per_row']
+    for i, pos_id in enumerate(position_ids):
+        k = len(cells_by_pos[pos_id])
+        oidx = color_index.get(pos_id, i) if color_index is not None else i
+        if current and count + k > mcr:
+            rows.append(row(*current))
+            current, count = [], 0
+        current.append(_make_position_card(oidx, pos_id, cells_by_pos, ctx))
+        count += k
+    if current:
+        rows.append(row(*current))
+    return column(*rows)
+
+
 def build_cells_dashboard(top_row=None, max_cells_per_row=6, base_fig_size=180):
     """Build the interactive cell-preview dashboard from the global `data` dict.
 
@@ -294,31 +524,18 @@ def build_cells_dashboard(top_row=None, max_cells_per_row=6, base_fig_size=180):
     Returns a Bokeh layout. ``top_row`` is placed above the cell grid (used by
     the nd2 dashboard for the timing-deviation plots).
     """
-    color_mapper = LinearColorMapper(palette=Greys256, low=0, high=255)
-    line_colors = ['blue', 'black', 'green', 'red', 'purple']
-
-    def _pos_cell(key):
-        # keys look like 'pos{pos_id}_cell{idx}'
-        pos_part, cell_part = key.split('_')
-        return int(pos_part[3:]), int(cell_part[4:])
-
-    # ---- group the detected cells by their position ----------------------
-    cells_by_pos = {}
-    for key in data:
-        if 'img' not in data[key]:
-            continue
-        pos_id, _ = _pos_cell(key)
-        cells_by_pos.setdefault(pos_id, []).append(key)
+    # ---- shared per-dashboard state --------------------------------------
+    selected_positions = set()
+    ctx = {
+        'fig_size': {'v': base_fig_size},   # mutated by the zoom buttons
+        'color_mapper': LinearColorMapper(palette=Greys256, low=0, high=255),
+        'all_figs': [],                     # every figure, so zoom can resize them
+        'selected_positions': selected_positions,
+        'max_cells_per_row': max_cells_per_row,
+    }
+    cells_by_pos = _group_cells_by_pos()
     ordered_positions = sorted(cells_by_pos)
 
-    # alternating colours so neighbouring positions are visually distinct
-    band_colors = ["#1f77b4", "#ff7f0e"]   # strong colour for the header band
-    tint_colors = ["#eaf2fb", "#fff3e6"]   # matching light figure background
-
-    # ---- shared state ----------------------------------------------------
-    selected_positions = set()
-    all_figs = []                       # every figure, so the zoom buttons can resize them
-    fig_size = {'v': base_fig_size}
     selected_div = Div(text="<b>No position selected yet.</b>", width=500)
     export_status = Div(text="", width=700)
 
@@ -340,72 +557,17 @@ def build_cells_dashboard(top_row=None, max_cells_per_row=6, base_fig_size=180):
                 selected_positions.discard(pos_id)
             refresh_selected()
         return _cb
+    ctx['on_keep'] = make_checkbox_callback
 
-    # ---- one bordered, colour-coded card per position --------------------
-    def make_position_card(order_idx, pos_id):
-        tint = tint_colors[order_idx % 2]
-        band = band_colors[order_idx % 2]
-
-        cell_units = []
-        for key in cells_by_pos[pos_id]:
-            _, cell_idx = _pos_cell(key)
-
-            p_img = figure(width=fig_size['v'], height=fig_size['v'],
-                           title=f"cell {cell_idx}", toolbar_location=None)
-            p_img.image(image=[data[key]['img']], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
-            p_img.axis.visible = False
-            p_img.grid.visible = False
-            p_img.background_fill_color = tint
-            p_img.border_fill_color = tint
-
-            p_plot = figure(width=fig_size['v'], height=fig_size['v'], toolbar_location=None)
-            ints = data[key].get('intensities', {})
-            for i, ch in enumerate(sorted(ints)):
-                p_plot.line(x=data[key]['time'], y=ints[ch],
-                            line_color=line_colors[i % len(line_colors)])
-            p_plot.background_fill_color = tint
-            p_plot.border_fill_color = tint
-
-            all_figs.append(p_img)
-            all_figs.append(p_plot)
-            cell_units.append(column(p_img, p_plot))   # image stacked over its intensity plot
-
-        header = Div(
-            text=(f"<div style='background:{band}; color:white; padding:3px 10px; "
-                  f"font-weight:bold; border-radius:4px;'>Position {pos_id} "
-                  f"&middot; {len(cells_by_pos[pos_id])} cells</div>"),
-            width=max(150, base_fig_size))
-        keep_cb = CheckboxGroup(labels=[f"keep position {pos_id}"], active=[])
-        keep_cb.on_change('active', make_checkbox_callback(pos_id))
-
-        # the whole card is boxed and tinted so it is unambiguous which label /
-        # checkbox belongs to which set of cells
-        return column(
-            row(header, keep_cb),
-            row(*cell_units),
-            styles={'border': f'2px solid {band}', 'border-radius': '8px',
-                    'padding': '6px', 'margin': '6px', 'background': tint},
-        )
-
-    # ---- pack positions onto rows; never split a position ----------------
-    rows, current, count = [], [], 0
-    for order_idx, pos_id in enumerate(ordered_positions):
-        k = len(cells_by_pos[pos_id])
-        if current and count + k > max_cells_per_row:
-            rows.append(row(*current))
-            current, count = [], 0
-        current.append(make_position_card(order_idx, pos_id))
-        count += k
-    if current:
-        rows.append(row(*current))
-    cells_layout = column(*rows)
+    # group cells into bordered cards and pack several positions per row
+    cells_layout = _pack_position_cards(ordered_positions, cells_by_pos, ctx)
 
     # ---- zoom controls ---------------------------------------------------
     def zoom(factor):
-        fig_size['v'] = int(max(70, min(600, fig_size['v'] * factor)))
-        for f in all_figs:
-            f.width = fig_size['v']
-            f.height = fig_size['v']
+        ctx['fig_size']['v'] = int(max(70, min(600, ctx['fig_size']['v'] * factor)))
+        for f in ctx['all_figs']:
+            f.width = ctx['fig_size']['v']
+            f.height = ctx['fig_size']['v']
     zoom_in = Button(label="Zoom +", width=90)
     zoom_out = Button(label="Zoom -", width=90)
     zoom_in.on_click(lambda: zoom(1.25))
@@ -448,6 +610,224 @@ def build_cells_dashboard(top_row=None, max_cells_per_row=6, base_fig_size=180):
     parts.append(controls)
     parts.append(tabs)
     return column(*parts)
+
+
+def build_stream_dashboard(doc, stream_state, page_size=12, max_cells_per_row=6,
+                           base_fig_size=180, refresh_ms=1500):
+    """Paginated dashboard that fills in live while a background worker reads the
+    file. Only one page of positions is materialised in the browser at a time, so
+    the page stays light even for hundreds of positions. A periodic callback
+    (running on the Bokeh IO loop) reads the global `data`/`stream_state` that the
+    worker thread fills, and re-renders only when the visible page changes."""
+    selected_positions = set()
+    ctx = {
+        'fig_size': {'v': base_fig_size},
+        'color_mapper': LinearColorMapper(palette=Greys256, low=0, high=255),
+        'all_figs': [],
+        'selected_positions': selected_positions,
+        'max_cells_per_row': max_cells_per_row,
+    }
+
+    status_div    = Div(text="<b>Starting…</b>", width=700)
+    page_label    = Div(text="", width=280)
+    selected_div  = Div(text="<b>No position selected yet.</b>", width=500)
+    export_status = Div(text="", width=700)
+    page_container = column()
+    page = {'i': 0, 'follow': True, 'rendered': None}
+
+    def refresh_selected():
+        if selected_positions:
+            cbp = _group_cells_by_pos()
+            items = "".join(
+                f"<li>position <b>{p}</b> &nbsp;({len(cbp.get(p, []))} cells)</li>"
+                for p in sorted(selected_positions))
+            selected_div.text = (f"<b>{len(selected_positions)} position(s) kept:</b>"
+                                 f"<ul>{items}</ul>")
+        else:
+            selected_div.text = "<b>No position selected yet.</b>"
+
+    def make_checkbox_callback(pos_id):
+        def _cb(attr, old, new):
+            if new:
+                selected_positions.add(pos_id)
+            else:
+                selected_positions.discard(pos_id)
+            refresh_selected()
+        return _cb
+    ctx['on_keep'] = make_checkbox_callback
+
+    def n_pages(positions):
+        return max(1, (len(positions) + page_size - 1) // page_size)
+
+    def page_slice(positions):
+        total = n_pages(positions)
+        i = total - 1 if page['follow'] else min(max(0, page['i']), total - 1)
+        start = i * page_size
+        return i, total, positions[start:start + page_size]
+
+    def render_page():
+        cells_by_pos = _group_cells_by_pos()
+        positions = sorted(cells_by_pos)
+        color_index = {p: idx for idx, p in enumerate(positions)}   # stable colour per position
+        i, total, page_positions = page_slice(positions)
+        page['i'] = i
+        ctx['all_figs'] = []                                        # only current-page figures stay live
+        page_container.children = [
+            _pack_position_cards(page_positions, cells_by_pos, ctx, color_index)]
+        page['rendered'] = page_positions
+        if page_positions:
+            page_label.text = (f"Page {i + 1}/{total} — positions "
+                               f"{page_positions[0]}–{page_positions[-1]}")
+        else:
+            page_label.text = f"Page {i + 1}/{total} — (no cells yet)"
+
+    def refresh():
+        st = stream_state
+        verb = 'Done' if st.get('done') else 'Processing'
+        msg = (f"<b>{verb}:</b> {st.get('pos_done', 0)}/{st.get('pos_total', '?')} "
+               f"positions read · {len(_group_cells_by_pos())} positions with cells")
+        if st.get('error'):
+            msg += f" · <span style='color:red'>ERROR: {st['error']}</span>"
+        status_div.text = msg
+        # only rebuild when the visible slice actually changed (keeps it cheap)
+        _, _, page_positions = page_slice(sorted(_group_cells_by_pos()))
+        if page_positions != page['rendered']:
+            render_page()
+
+    # ---- navigation ------------------------------------------------------
+    def go_prev():
+        page['follow'] = False
+        page['i'] -= 1
+        render_page()
+    def go_next():
+        page['follow'] = False
+        page['i'] += 1
+        render_page()
+    def go_latest():
+        page['follow'] = True
+        render_page()
+    prev_btn   = Button(label="◀ Prev", width=80)
+    next_btn   = Button(label="Next ▶", width=80)
+    latest_btn = Button(label="Follow latest", button_type="primary", width=120)
+    prev_btn.on_click(go_prev)
+    next_btn.on_click(go_next)
+    latest_btn.on_click(go_latest)
+
+    # ---- zoom ------------------------------------------------------------
+    def zoom(factor):
+        ctx['fig_size']['v'] = int(max(70, min(600, ctx['fig_size']['v'] * factor)))
+        for f in ctx['all_figs']:
+            f.width = ctx['fig_size']['v']
+            f.height = ctx['fig_size']['v']
+    zoom_in = Button(label="Zoom +", width=90)
+    zoom_out = Button(label="Zoom -", width=90)
+    zoom_in.on_click(lambda: zoom(1.25))
+    zoom_out.on_click(lambda: zoom(0.8))
+
+    # ---- CSV export ------------------------------------------------------
+    def _csv_path():
+        if source_file:
+            p = Path(source_file)
+            return str(p.with_name(p.stem + '_positions.csv'))
+        return os.path.join(os.getcwd(), 'positions.csv')
+    def export_csv():
+        cells_by_pos = _group_cells_by_pos()
+        out = _csv_path()
+        with open(out, 'w', newline='') as fh:
+            writer = csv.writer(fh)
+            writer.writerow(['position', 'n_cells', 'keep'])
+            for pos in sorted(cells_by_pos):
+                writer.writerow([pos, len(cells_by_pos[pos]), pos in selected_positions])
+        export_status.text = f"Saved <code>{out}</code> ({len(cells_by_pos)} positions)"
+        print('Saved CSV:', out)
+    export_button = Button(label="Export positions CSV", button_type="success", width=200)
+    export_button.on_click(export_csv)
+
+    print_button = Button(label="Print kept positions", button_type="primary", width=180)
+    print_button.on_click(lambda: print("kept positions:", sorted(selected_positions)))
+
+    nav = row(prev_btn, next_btn, latest_btn, page_label)
+    controls = row(Div(text="<b>Zoom plots:</b>", width=80), zoom_in, zoom_out)
+    tabs = Tabs(tabs=[
+        TabPanel(child=column(nav, page_container), title="Cells by position"),
+        TabPanel(child=column(selected_div, row(print_button, export_button), export_status),
+                 title="Selected positions"),
+    ])
+
+    render_page()                                  # initial (likely empty) page
+    doc.add_periodic_callback(refresh, refresh_ms)
+    return column(status_div, controls, tabs)
+
+
+def _stream_worker(file, low_crop, high_crop, model_detect, n, max_factor, state, verbose):
+    """Background-thread body: lazily read the nd2 and fill `data` position by
+    position, updating `state` for the UI. Touches only plain dicts, never Bokeh
+    models (the periodic callback on the IO loop does all rendering)."""
+    global source_file
+    source_file = file
+    try:
+        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+        get_timelaps(file)
+        f, xarr, pos_dim, n_pos = _open_nd2_lazy(file, verbose=verbose)
+        state['pos_total'] = min(n, n_pos) if n > 0 else n_pos
+        try:
+            for pos_id in range(n_pos):
+                if n > 0 and pos_id >= n:
+                    break
+                block = _read_position_block(xarr, pos_dim, pos_id)
+                tmin = [t / 60000. for t in time_data.get(pos_id, [])] or None
+                n_kept = _detect_and_store(block, pos_id, low_crop, high_crop,
+                                           model_detect, device, max_factor, tmin)
+                del block
+                state['pos_done'] = pos_id + 1
+                state['dirty'] = True
+                print('[nd2] pos {}: {} cells'.format(pos_id, n_kept))
+        finally:
+            f.close()
+    except Exception as e:
+        state['error'] = repr(e)
+        logging.error("stream worker failed: %s", e, exc_info=True)
+    finally:
+        state['done'] = True
+        state['dirty'] = True
+
+
+def run_server_stream(file, low_crop, high_crop, model_detect, n=-9999, max_factor=1.5,
+                      port=5007, page_size=12, max_cells_per_row=6, base_fig_size=180,
+                      verbose=False):
+    """Start a Bokeh server that reads the nd2 in the background and displays
+    positions as they are detected, one page at a time.
+
+    Usage from the notebook (no separate process() call needed):
+        model = prev.load_model(model_path)
+        prev.run_server_stream(file, low_crop, high_crop, model)
+    """
+    data.clear()
+    time_data.clear()
+    state = {'pos_total': '?', 'pos_done': 0, 'done': False, 'dirty': True,
+             'error': None, 'started': False}
+
+    def modify(doc):
+        doc.add_root(build_stream_dashboard(doc, state, page_size=page_size,
+                                            max_cells_per_row=max_cells_per_row,
+                                            base_fig_size=base_fig_size))
+        if not state['started']:               # launch the reader once, on first connect
+            state['started'] = True
+            threading.Thread(
+                target=_stream_worker,
+                args=(file, low_crop, high_crop, model_detect, n, max_factor, state, verbose),
+                daemon=True).start()
+        logging.info("Stream app loaded.")
+
+    server = Server({'/': modify}, num_procs=1, port=port,
+                    allow_websocket_origin=[f"localhost:{port}"])
+    server.start()
+    server.io_loop.add_callback(server.show, "/")
+    try:
+        server.io_loop.start()
+    except RuntimeError:
+        print('loop is already running')
+        pass
 
 
 def modify_doc_czi(doc):
