@@ -27,7 +27,7 @@ from bokeh.plotting import figure, show, output_file
 from bokeh.layouts import gridplot, row, column
 from bokeh.io import curdoc
 from bokeh.models import ColumnDataSource, Patch
-from bokeh.models import CheckboxGroup, Div, Button, Tabs, TabPanel
+from bokeh.models import CheckboxGroup, Div, Button, Tabs, TabPanel, Select
 from bokeh.plotting import figure, curdoc
 from bokeh.server.server import Server
 from bokeh.models import LinearColorMapper, ColorBar
@@ -612,13 +612,14 @@ def build_cells_dashboard(top_row=None, max_cells_per_row=6, base_fig_size=180):
     return column(*parts)
 
 
-def build_stream_dashboard(doc, stream_state, page_size=12, max_cells_per_row=6,
+def build_stream_dashboard(doc, stream_state, cells_per_page=24, max_cells_per_row=6,
                            base_fig_size=180, refresh_ms=1500):
     """Paginated dashboard that fills in live while a background worker reads the
-    file. Only one page of positions is materialised in the browser at a time, so
-    the page stays light even for hundreds of positions. A periodic callback
-    (running on the Bokeh IO loop) reads the global `data`/`stream_state` that the
-    worker thread fills, and re-renders only when the visible page changes."""
+    file. Only one page worth of cells is materialised in the browser at a time,
+    so the page stays light even for hundreds of positions. A periodic callback
+    (on the Bokeh IO loop) reads the global `data`/`stream_state` the worker
+    thread fills, refreshes the status/page label every tick, and rebuilds the
+    cards only when the visible page actually changes."""
     selected_positions = set()
     ctx = {
         'fig_size': {'v': base_fig_size},
@@ -629,11 +630,11 @@ def build_stream_dashboard(doc, stream_state, page_size=12, max_cells_per_row=6,
     }
 
     status_div    = Div(text="<b>Starting…</b>", width=700)
-    page_label    = Div(text="", width=280)
+    page_label    = Div(text="", width=300)
     selected_div  = Div(text="<b>No position selected yet.</b>", width=500)
     export_status = Div(text="", width=700)
     page_container = column()
-    page = {'i': 0, 'follow': True, 'rendered': None}
+    page = {'i': 0, 'follow': True, 'rendered': None, 'size': cells_per_page}
 
     def refresh_selected():
         if selected_positions:
@@ -656,52 +657,75 @@ def build_stream_dashboard(doc, stream_state, page_size=12, max_cells_per_row=6,
         return _cb
     ctx['on_keep'] = make_checkbox_callback
 
-    def n_pages(positions):
-        return max(1, (len(positions) + page_size - 1) // page_size)
+    # ---- pagination by *cells* (never splitting a position) --------------
+    def compute_pages(positions, cells_by_pos):
+        budget = page['size']
+        pages, cur, cnt = [], [], 0
+        for p in positions:
+            k = len(cells_by_pos[p])
+            if cur and cnt + k > budget:     # a position with > budget cells gets its own page
+                pages.append(cur)
+                cur, cnt = [], 0
+            cur.append(p)
+            cnt += k
+        if cur:
+            pages.append(cur)
+        return pages or [[]]
 
-    def page_slice(positions):
-        total = n_pages(positions)
-        i = total - 1 if page['follow'] else min(max(0, page['i']), total - 1)
-        start = i * page_size
-        return i, total, positions[start:start + page_size]
-
-    def render_page():
+    def current_view():
         cells_by_pos = _group_cells_by_pos()
         positions = sorted(cells_by_pos)
-        color_index = {p: idx for idx, p in enumerate(positions)}   # stable colour per position
-        i, total, page_positions = page_slice(positions)
-        page['i'] = i
-        ctx['all_figs'] = []                                        # only current-page figures stay live
-        page_container.children = [
-            _pack_position_cards(page_positions, cells_by_pos, ctx, color_index)]
-        page['rendered'] = page_positions
+        pages = compute_pages(positions, cells_by_pos)
+        i = (len(pages) - 1) if page['follow'] else min(max(0, page['i']), len(pages) - 1)
+        return cells_by_pos, positions, pages, i
+
+    def update_label(i, total, page_positions):
         if page_positions:
             page_label.text = (f"Page {i + 1}/{total} — positions "
                                f"{page_positions[0]}–{page_positions[-1]}")
         else:
             page_label.text = f"Page {i + 1}/{total} — (no cells yet)"
+        prev_btn.disabled = (i <= 0)
+        next_btn.disabled = (i >= total - 1)
+
+    def render_page():
+        cells_by_pos, positions, pages, i = current_view()
+        page['i'] = i
+        color_index = {p: idx for idx, p in enumerate(positions)}   # stable colour per position
+        page_positions = pages[i]
+        ctx['all_figs'] = []                                        # only current-page figures stay live
+        page_container.children = [
+            _pack_position_cards(page_positions, cells_by_pos, ctx, color_index)]
+        page['rendered'] = page_positions
+        update_label(i, len(pages), page_positions)
 
     def refresh():
         st = stream_state
         verb = 'Done' if st.get('done') else 'Processing'
         msg = (f"<b>{verb}:</b> {st.get('pos_done', 0)}/{st.get('pos_total', '?')} "
-               f"positions read · {len(_group_cells_by_pos())} positions with cells")
+               f"positions read · {len(_group_cells_by_pos())} with cells · "
+               f"{len(selected_positions)} kept")
         if st.get('error'):
             msg += f" · <span style='color:red'>ERROR: {st['error']}</span>"
         status_div.text = msg
-        # only rebuild when the visible slice actually changed (keeps it cheap)
-        _, _, page_positions = page_slice(sorted(_group_cells_by_pos()))
+        # rebuild cards only when the visible slice changed, but always keep the
+        # page label / total fresh so "/N" grows while you sit on an earlier page
+        _, _, pages, i = current_view()
+        page['i'] = i
+        page_positions = pages[i]
         if page_positions != page['rendered']:
             render_page()
+        else:
+            update_label(i, len(pages), page_positions)
 
     # ---- navigation ------------------------------------------------------
     def go_prev():
         page['follow'] = False
-        page['i'] -= 1
+        page['i'] = max(0, page['i'] - 1)
         render_page()
     def go_next():
         page['follow'] = False
-        page['i'] += 1
+        page['i'] += 1                     # current_view() clamps to the last page
         render_page()
     def go_latest():
         page['follow'] = True
@@ -713,12 +737,35 @@ def build_stream_dashboard(doc, stream_state, page_size=12, max_cells_per_row=6,
     next_btn.on_click(go_next)
     latest_btn.on_click(go_latest)
 
-    # ---- zoom ------------------------------------------------------------
+    # ---- cells-per-page dropdown -----------------------------------------
+    size_options = ['6', '12', '24', '48', '100', 'all']
+    size_select = Select(title="Cells/page",
+                         value=str(cells_per_page) if str(cells_per_page) in size_options else '24',
+                         options=size_options, width=90)
+    def on_size_change(attr, old, new):
+        anchor = page['rendered'][0] if page['rendered'] else None   # keep the top position in view
+        page['size'] = 10 ** 9 if new == 'all' else int(new)
+        page['follow'] = False
+        if anchor is not None:
+            cells_by_pos = _group_cells_by_pos()
+            for idx, pg in enumerate(compute_pages(sorted(cells_by_pos), cells_by_pos)):
+                if anchor in pg:
+                    page['i'] = idx
+                    break
+        render_page()
+    size_select.on_change('value', on_size_change)
+
+    # ---- zoom (batched so every plot resizes in a single update) ---------
     def zoom(factor):
         ctx['fig_size']['v'] = int(max(70, min(600, ctx['fig_size']['v'] * factor)))
-        for f in ctx['all_figs']:
-            f.width = ctx['fig_size']['v']
-            f.height = ctx['fig_size']['v']
+        v = ctx['fig_size']['v']
+        doc.hold()                          # collect all the size changes...
+        try:
+            for f in ctx['all_figs']:
+                f.width = v
+                f.height = v
+        finally:
+            doc.unhold()                    # ...then push them to the browser at once
     zoom_in = Button(label="Zoom +", width=90)
     zoom_out = Button(label="Zoom -", width=90)
     zoom_in.on_click(lambda: zoom(1.25))
@@ -746,7 +793,7 @@ def build_stream_dashboard(doc, stream_state, page_size=12, max_cells_per_row=6,
     print_button = Button(label="Print kept positions", button_type="primary", width=180)
     print_button.on_click(lambda: print("kept positions:", sorted(selected_positions)))
 
-    nav = row(prev_btn, next_btn, latest_btn, page_label)
+    nav = row(prev_btn, next_btn, latest_btn, size_select, page_label)
     controls = row(Div(text="<b>Zoom plots:</b>", width=80), zoom_in, zoom_out)
     tabs = Tabs(tabs=[
         TabPanel(child=column(nav, page_container), title="Cells by position"),
@@ -793,7 +840,7 @@ def _stream_worker(file, low_crop, high_crop, model_detect, n, max_factor, state
 
 
 def run_server_stream(file, low_crop, high_crop, model_detect, n=-9999, max_factor=1.5,
-                      port=5007, page_size=12, max_cells_per_row=6, base_fig_size=180,
+                      port=5007, cells_per_page=24, max_cells_per_row=6, base_fig_size=180,
                       verbose=False):
     """Start a Bokeh server that reads the nd2 in the background and displays
     positions as they are detected, one page at a time.
@@ -808,7 +855,7 @@ def run_server_stream(file, low_crop, high_crop, model_detect, n=-9999, max_fact
              'error': None, 'started': False}
 
     def modify(doc):
-        doc.add_root(build_stream_dashboard(doc, state, page_size=page_size,
+        doc.add_root(build_stream_dashboard(doc, state, cells_per_page=cells_per_page,
                                             max_cells_per_row=max_cells_per_row,
                                             base_fig_size=base_fig_size))
         if not state['started']:               # launch the reader once, on first connect
