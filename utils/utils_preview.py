@@ -1,4 +1,5 @@
 import os
+import csv
 import numpy  as np
 import nd2
 import nd2reader as nd2reader
@@ -42,6 +43,7 @@ from aicspylibczi import CziFile
 nest_asyncio.apply()
 data={}
 time_data={}
+source_file = None   # path of the file currently loaded into `data` (used for CSV export)
 
 model_detect = None
 
@@ -126,25 +128,28 @@ def process_czi_image(image, low_crop, high_crop, model_detect, n=-9999, show=Fa
         if show:
             plt.show()
 
-def process_czi(file, low_crop, high_crop, model_detect, seg_chan=2, n=-9999):
+def process_czi(file, low_crop, high_crop, model_detect, seg_chan=2, n=-9999, verbose=False):
+    global source_file
+    source_file = file
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     czi  = CziFile(file)
     dims = czi.get_dims_shape()
     n_cells = len(dims)
-    print('N cells ',n_cells)
+    if verbose: print('N cells ',n_cells)
     if n_cells==1:
         n_cells=dims[0]['S'][1]
     for s in range(n_cells):
         #print(dims[s])
         n_time=dims[0]["T"][1]
         n_ch=dims[0]["C"][1]
-        print('processing scene ',s, '  ntime=',n_time, '  nchannels=',n_ch)
+        if verbose: print('processing scene ',s, '  ntime=',n_time, '  nchannels=',n_ch)
         img_t0, dim_t0 = czi.read_image(S=s,T=0,C=seg_chan)
         img_t0 = img_t0.squeeze()
+        n_kept = 0
         image_prepro = preprocess_image_pytorch(img_t0).to(device)
         with torch.no_grad():
             predictions = model_detect(image_prepro)
-            print(predictions)
+            if verbose: print(predictions)
             for idx, box in enumerate(predictions[0]['boxes']):
                 x_min, y_min, x_max, y_max = box.cpu().numpy()
                 if float(predictions[0]['scores'][idx].cpu().numpy())<0.8:continue
@@ -158,7 +163,7 @@ def process_czi(file, low_crop, high_crop, model_detect, seg_chan=2, n=-9999):
                 intensity_normalized = (image - min_value)/(max_value-min_value)*255
                 intensity_normalized = intensity_normalized.astype(np.uint8)
                 data['pos{}_cell{}'.format(s,idx)]['img']=intensity_normalized
-                print('=========== ','pos{}_cell{}'.format(s,idx))
+                n_kept += 1
 
 
                 intensities={}
@@ -174,7 +179,7 @@ def process_czi(file, low_crop, high_crop, model_detect, seg_chan=2, n=-9999):
                         intensities[ch]=[]
                         arr_t, dim_t=czi.read_image(S=s,C=ch, core=10)
                         image_t = arr_t.squeeze()
-                        print('----------------',image_t.shape)
+                        if verbose: print('----------------',image_t.shape)
                         for t in range(n_time):
                             intensities[ch].append(image_t[t][int(y_min*low_crop):int(y_max*high_crop), int(x_min*low_crop):int(x_max*high_crop)].max())
 
@@ -187,6 +192,7 @@ def process_czi(file, low_crop, high_crop, model_detect, seg_chan=2, n=-9999):
                     if ch==1:intensities[ch]=intensity_normalized+1
                 data['pos{}_cell{}'.format(s,idx)]['time']=time
                 data['pos{}_cell{}'.format(s,idx)]['intensities']=intensities
+        print('[czi] scene {}: {} cells'.format(s, n_kept))
         #if s==5:break
     del czi
 
@@ -194,34 +200,37 @@ def process_czi(file, low_crop, high_crop, model_detect, seg_chan=2, n=-9999):
 
 
 
-def process(file, low_crop, high_crop, model_detect, n=-9999, max_factor=1.5):
+def process(file, low_crop, high_crop, model_detect, n=-9999, max_factor=1.5, verbose=False):
+    global source_file
+    source_file = file
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     get_timelaps(file)
 
     current_file=os.path.join(file)
     time_lapse_path = Path(current_file)
-    print('time_lapse_path = ',time_lapse_path)
+    if verbose: print('time_lapse_path = ',time_lapse_path)
     time_lapse = nd2.imread(time_lapse_path.as_posix())
     time_lapse = time_lapse.transpose(1,0,2,3,4)
 
-    print(time_lapse.shape)#(81=t, 110=pos, 3, 512, 512)
+    if verbose: print(time_lapse.shape)#(81=t, 110=pos, 3, 512, 512)
 
     for pos_id, pos in enumerate(time_lapse):
         if n>0 and n==pos_id:break
         pos = pos.transpose(1,0,2,3)
         BF_images = pos[0]
 
+        n_kept = 0
         image_prepro = preprocess_image_pytorch(BF_images[0]).to(device)
         with torch.no_grad():
             predictions = model_detect(image_prepro)
-            print(predictions)
+            if verbose: print(predictions)
             for idx, box in enumerate(predictions[0]['boxes']):
                 x_min, y_min, x_max, y_max = box.cpu().numpy()
                 if float(predictions[0]['scores'][idx].cpu().numpy())<0.8:continue
                 if (x_max-x_min)*(y_max-y_min)<150:continue
                 data['pos{}_cell{}'.format(pos_id,idx)]={}
 
-                center = (x_min+(x_max-x_min)/2.,y_min+(y_max-y_min)/2.) 
+                center = (x_min+(x_max-x_min)/2.,y_min+(y_max-y_min)/2.)
                 target_size = (100, 100)
                 #cropped_image = BF_images[0][int(center[1]-target_size[1]/2):int(center[1]+target_size[1]/2), int(center[0]-target_size[0]/2):int(center[0]+target_size[0]/2)]
                 image=BF_images[0][int(y_min*low_crop):int(y_max*high_crop), int(x_min*low_crop):int(x_max*high_crop)]
@@ -231,8 +240,8 @@ def process(file, low_crop, high_crop, model_detect, n=-9999, max_factor=1.5):
                 intensity_normalized = (image - min_value)/(max_value-min_value)*255
                 intensity_normalized = intensity_normalized.astype(np.uint8)
                 data['pos{}_cell{}'.format(pos_id,idx)]['img']=intensity_normalized
-                print('=========== ','pos{}_cell{}'.format(pos_id,idx))
-            
+                n_kept += 1
+
                 #rect = patches.Rectangle((x_min*0.85, y_min*0.85), x_max*1.15 - x_min*0.85, y_max*1.15 - y_min*0.85, linewidth=1, edgecolor='white', facecolor='none')
                 #ax.add_patch(rect)
 
@@ -269,51 +278,189 @@ def process(file, low_crop, high_crop, model_detect, n=-9999, max_factor=1.5):
                     if ch==2:intensities[ch]=intensity_normalized+1
                 data['pos{}_cell{}'.format(pos_id,idx)]['time']=time
                 data['pos{}_cell{}'.format(pos_id,idx)]['intensities']=intensities
+        print('[nd2] pos {}: {} cells'.format(pos_id, n_kept))
     del time_lapse
 
+def build_cells_dashboard(top_row=None, max_cells_per_row=6, base_fig_size=180):
+    """Build the interactive cell-preview dashboard from the global `data` dict.
+
+    - cells are grouped per position inside a bordered, colour-coded card;
+    - positions are packed several per row (a position is never split across
+      rows) up to ``max_cells_per_row`` cells per row;
+    - every position has a "keep" checkbox; kept positions are listed in a
+      separate tab and can be dumped to CSV (one row per position, keep flag);
+    - "Zoom +/-" buttons rescale every image / intensity plot on the page.
+
+    Returns a Bokeh layout. ``top_row`` is placed above the cell grid (used by
+    the nd2 dashboard for the timing-deviation plots).
+    """
+    color_mapper = LinearColorMapper(palette=Greys256, low=0, high=255)
+    line_colors = ['blue', 'black', 'green', 'red', 'purple']
+
+    def _pos_cell(key):
+        # keys look like 'pos{pos_id}_cell{idx}'
+        pos_part, cell_part = key.split('_')
+        return int(pos_part[3:]), int(cell_part[4:])
+
+    # ---- group the detected cells by their position ----------------------
+    cells_by_pos = {}
+    for key in data:
+        if 'img' not in data[key]:
+            continue
+        pos_id, _ = _pos_cell(key)
+        cells_by_pos.setdefault(pos_id, []).append(key)
+    ordered_positions = sorted(cells_by_pos)
+
+    # alternating colours so neighbouring positions are visually distinct
+    band_colors = ["#1f77b4", "#ff7f0e"]   # strong colour for the header band
+    tint_colors = ["#eaf2fb", "#fff3e6"]   # matching light figure background
+
+    # ---- shared state ----------------------------------------------------
+    selected_positions = set()
+    all_figs = []                       # every figure, so the zoom buttons can resize them
+    fig_size = {'v': base_fig_size}
+    selected_div = Div(text="<b>No position selected yet.</b>", width=500)
+    export_status = Div(text="", width=700)
+
+    def refresh_selected():
+        if selected_positions:
+            items = "".join(
+                f"<li>position <b>{p}</b> &nbsp;({len(cells_by_pos[p])} cells)</li>"
+                for p in sorted(selected_positions))
+            selected_div.text = (f"<b>{len(selected_positions)} position(s) kept:</b>"
+                                 f"<ul>{items}</ul>")
+        else:
+            selected_div.text = "<b>No position selected yet.</b>"
+
+    def make_checkbox_callback(pos_id):
+        def _cb(attr, old, new):
+            if new:                       # non-empty active list -> ticked
+                selected_positions.add(pos_id)
+            else:
+                selected_positions.discard(pos_id)
+            refresh_selected()
+        return _cb
+
+    # ---- one bordered, colour-coded card per position --------------------
+    def make_position_card(order_idx, pos_id):
+        tint = tint_colors[order_idx % 2]
+        band = band_colors[order_idx % 2]
+
+        cell_units = []
+        for key in cells_by_pos[pos_id]:
+            _, cell_idx = _pos_cell(key)
+
+            p_img = figure(width=fig_size['v'], height=fig_size['v'],
+                           title=f"cell {cell_idx}", toolbar_location=None)
+            p_img.image(image=[data[key]['img']], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
+            p_img.axis.visible = False
+            p_img.grid.visible = False
+            p_img.background_fill_color = tint
+            p_img.border_fill_color = tint
+
+            p_plot = figure(width=fig_size['v'], height=fig_size['v'], toolbar_location=None)
+            ints = data[key].get('intensities', {})
+            for i, ch in enumerate(sorted(ints)):
+                p_plot.line(x=data[key]['time'], y=ints[ch],
+                            line_color=line_colors[i % len(line_colors)])
+            p_plot.background_fill_color = tint
+            p_plot.border_fill_color = tint
+
+            all_figs.append(p_img)
+            all_figs.append(p_plot)
+            cell_units.append(column(p_img, p_plot))   # image stacked over its intensity plot
+
+        header = Div(
+            text=(f"<div style='background:{band}; color:white; padding:3px 10px; "
+                  f"font-weight:bold; border-radius:4px;'>Position {pos_id} "
+                  f"&middot; {len(cells_by_pos[pos_id])} cells</div>"),
+            width=max(150, base_fig_size))
+        keep_cb = CheckboxGroup(labels=[f"keep position {pos_id}"], active=[])
+        keep_cb.on_change('active', make_checkbox_callback(pos_id))
+
+        # the whole card is boxed and tinted so it is unambiguous which label /
+        # checkbox belongs to which set of cells
+        return column(
+            row(header, keep_cb),
+            row(*cell_units),
+            styles={'border': f'2px solid {band}', 'border-radius': '8px',
+                    'padding': '6px', 'margin': '6px', 'background': tint},
+        )
+
+    # ---- pack positions onto rows; never split a position ----------------
+    rows, current, count = [], [], 0
+    for order_idx, pos_id in enumerate(ordered_positions):
+        k = len(cells_by_pos[pos_id])
+        if current and count + k > max_cells_per_row:
+            rows.append(row(*current))
+            current, count = [], 0
+        current.append(make_position_card(order_idx, pos_id))
+        count += k
+    if current:
+        rows.append(row(*current))
+    cells_layout = column(*rows)
+
+    # ---- zoom controls ---------------------------------------------------
+    def zoom(factor):
+        fig_size['v'] = int(max(70, min(600, fig_size['v'] * factor)))
+        for f in all_figs:
+            f.width = fig_size['v']
+            f.height = fig_size['v']
+    zoom_in = Button(label="Zoom +", width=90)
+    zoom_out = Button(label="Zoom -", width=90)
+    zoom_in.on_click(lambda: zoom(1.25))
+    zoom_out.on_click(lambda: zoom(0.8))
+
+    # ---- CSV export ------------------------------------------------------
+    def _csv_path():
+        if source_file:
+            p = Path(source_file)
+            return str(p.with_name(p.stem + '_positions.csv'))
+        return os.path.join(os.getcwd(), 'positions.csv')
+
+    def export_csv():
+        out = _csv_path()
+        with open(out, 'w', newline='') as fh:
+            writer = csv.writer(fh)
+            # extra categories can be added as further columns later
+            writer.writerow(['position', 'n_cells', 'keep'])
+            for pos in ordered_positions:
+                writer.writerow([pos, len(cells_by_pos[pos]), pos in selected_positions])
+        export_status.text = f"Saved <code>{out}</code> ({len(ordered_positions)} positions)"
+        print('Saved CSV:', out)
+    export_button = Button(label="Export positions CSV", button_type="success", width=200)
+    export_button.on_click(export_csv)
+
+    print_button = Button(label="Print kept positions", button_type="primary", width=180)
+    print_button.on_click(lambda: print("kept positions:", sorted(selected_positions)))
+
+    controls = row(Div(text="<b>Zoom plots:</b>", width=80), zoom_in, zoom_out)
+
+    tabs = Tabs(tabs=[
+        TabPanel(child=cells_layout, title="Cells by position"),
+        TabPanel(child=column(selected_div, row(print_button, export_button), export_status),
+                 title="Selected positions"),
+    ])
+
+    parts = []
+    if top_row is not None:
+        parts.append(top_row)
+    parts.append(controls)
+    parts.append(tabs)
+    return column(*parts)
+
+
 def modify_doc_czi(doc):
-
-    def create_bokeh_layout_czi():
-
-        plots = []
-        n_columns = 6
-        color_mapper = LinearColorMapper(palette=Greys256, low=0, high=255)  # Adjust low and high according to your data range
-        for pos in data:
-
-            image = data[pos]['img']
-        
-            p_img = figure(width=300, height=300, title=f"Image {pos}")
-            p_img.image(image=[image], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
-            p_img.axis.visible = False
-            p_img.grid.visible = False
-            p_img.axis.visible = False
-            p_img.grid.visible = False
-
-            p_plot = figure(width=300, height=300, title=f"Intensity {pos}")
-
-            for ch in data[pos]['intensities']:
-                if ch==0:  p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='blue')
-                elif ch==1:p_plot.line(x=data[pos]['time'], y=data[pos]['intensities'][ch], line_color='black')
-
-            plots.append(p_img)
-            plots.append(p_plot)
-
-
-        grid = gridplot(plots, ncols=n_columns)
-        layout = column(grid)
-        return layout
-
     try:
-        # Your Bokeh app code goes here, for example:
-        layout = create_bokeh_layout_czi()  # Make sure this function works as expected
-        doc.add_root(layout)
+        doc.add_root(build_cells_dashboard())
         logging.info("App loaded successfully.")
     except Exception as e:
-        logging.error(f"Error in modify_doc: {e}", exc_info=True)
+        logging.error(f"Error in modify_doc_czi: {e}", exc_info=True)
+
 
 def modify_doc(doc):
 
-    def create_bokeh_layout():
+    def make_period_plots():
 
         exp_period=time_data['exp_period']
 
@@ -377,114 +524,10 @@ def modify_doc(doc):
         glyph2 = Patch(x="x", y="y", fill_color="#a6cee3", fill_alpha=0.3, line_color="#a6cee3", line_alpha=0.3)
         p_period_vs_pos.add_glyph(source_period_vs_pos, glyph2)
 
-
-
-        # ---- group the detected cells by their position ----------------------
-        def _pos_cell(key):
-            # keys look like 'pos{pos_id}_cell{idx}'
-            pos_part, cell_part = key.split('_')
-            return int(pos_part[3:]), int(cell_part[4:])
-
-        cells_by_pos = {}
-        for key in data:
-            if 'img' not in data[key]:
-                continue
-            pos_id, _ = _pos_cell(key)
-            cells_by_pos.setdefault(pos_id, []).append(key)
-
-        ordered_positions = sorted(cells_by_pos)
-
-        # two alternating colours so neighbouring positions are visually distinct
-        band_colors = ["#1f77b4", "#ff7f0e"]   # strong colour for the header band
-        tint_colors = ["#eaf2fb", "#fff3e6"]   # matching light figure background
-
-        # ---- state shared with the "Selected positions" tab ------------------
-        selected_positions = set()
-        selected_div = Div(text="<b>No position selected yet.</b>", width=500)
-
-        def refresh_selected():
-            if selected_positions:
-                items = "".join(
-                    f"<li>position <b>{p}</b> &nbsp;({len(cells_by_pos[p])} cells)</li>"
-                    for p in sorted(selected_positions))
-                selected_div.text = (
-                    f"<b>{len(selected_positions)} position(s) kept:</b>"
-                    f"<ul>{items}</ul>")
-            else:
-                selected_div.text = "<b>No position selected yet.</b>"
-
-        def make_checkbox_callback(pos_id):
-            def _cb(attr, old, new):
-                if new:                       # non-empty active list -> ticked
-                    selected_positions.add(pos_id)
-                else:
-                    selected_positions.discard(pos_id)
-                refresh_selected()
-            return _cb
-
-        # ---- build one colour-coded block per position -----------------------
-        n_columns = 6
-        color_mapper = LinearColorMapper(palette=Greys256, low=0, high=255)  # Adjust low and high according to your data range
-
-        position_blocks = []
-        for order_idx, pos_id in enumerate(ordered_positions):
-            tint = tint_colors[order_idx % 2]
-            band = band_colors[order_idx % 2]
-
-            cell_plots = []
-            for key in cells_by_pos[pos_id]:
-                _, cell_idx = _pos_cell(key)
-                image = data[key]['img']
-
-                p_img = figure(width=300, height=300, title=f"img cell {cell_idx}")
-                p_img.image(image=[image], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
-                p_img.axis.visible = False
-                p_img.grid.visible = False
-                p_img.background_fill_color = tint
-                p_img.border_fill_color = tint
-
-                p_plot = figure(width=300, height=300, title=f"intensity cell {cell_idx}")
-                for ch in data[key]['intensities']:
-                    if ch == 1:  p_plot.line(x=data[key]['time'], y=data[key]['intensities'][ch], line_color='blue')
-                    elif ch == 2: p_plot.line(x=data[key]['time'], y=data[key]['intensities'][ch], line_color='black')
-                p_plot.background_fill_color = tint
-                p_plot.border_fill_color = tint
-
-                cell_plots.append(p_img)
-                cell_plots.append(p_plot)
-
-            grid = gridplot(cell_plots, ncols=n_columns)
-
-            header = Div(
-                text=(f"<div style='background:{band}; color:white; padding:4px 10px; "
-                      f"font-weight:bold; border-radius:4px;'>Position {pos_id} "
-                      f"&nbsp;&middot;&nbsp; {len(cells_by_pos[pos_id])} cells</div>"),
-                width=300)
-            keep_cb = CheckboxGroup(labels=[f"keep position {pos_id}"], active=[])
-            keep_cb.on_change('active', make_checkbox_callback(pos_id))
-
-            position_blocks.append(column(row(header, keep_cb), grid))
-
-        cells_layout = column(*position_blocks)
-
-        # ---- "Selected positions" tab ---------------------------------------
-        print_button = Button(label="Print kept positions to notebook",
-                              button_type="primary", width=250)
-        def _print_kept():
-            print("kept positions:", sorted(selected_positions))
-        print_button.on_click(_print_kept)
-
-        tabs = Tabs(tabs=[
-            TabPanel(child=cells_layout, title="Cells by position"),
-            TabPanel(child=column(selected_div, print_button), title="Selected positions"),
-        ])
-
-        layout = column(row(p_period_vs_frame, p_period_vs_pos), tabs)
-        return layout
+        return row(p_period_vs_frame, p_period_vs_pos)
 
     try:
-        # Your Bokeh app code goes here, for example:
-        layout = create_bokeh_layout()  # Make sure this function works as expected
+        layout = build_cells_dashboard(top_row=make_period_plots())
         doc.add_root(layout)
         logging.info("App loaded successfully.")
     except Exception as e:
