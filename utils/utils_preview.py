@@ -1,5 +1,7 @@
 import os
 import csv
+import io
+import base64
 import threading
 import numpy  as np
 import nd2
@@ -12,6 +14,8 @@ from skimage.measure import label, regionprops, find_contours
 import math
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 import torch
 import torchvision
@@ -436,6 +440,32 @@ def _group_cells_by_pos():
     return cells_by_pos
 
 
+def _img_to_datauri(arr):
+    """Encode a 2D uint8 grayscale array as a base64 PNG data URI for an <img>
+    tag (so thumbnails render as plain images instead of heavy Bokeh canvases)."""
+    buf = io.BytesIO()
+    plt.imsave(buf, np.asarray(arr), cmap='gray', vmin=0, vmax=255, format='png')
+    return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
+
+
+def _trace_to_datauri(time, intensities, px=300):
+    """Render intensity traces as a static PNG data URI (for "light" mode, where
+    no Bokeh canvas is used). Transparent background so the card tint shows
+    through; uses the matplotlib OO API so it is safe off the main thread."""
+    fig = Figure(figsize=(px / 100., px / 100.), dpi=100)
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111)
+    for i, ch in enumerate(sorted(intensities)):
+        ax.plot(time, intensities[ch], color=_LINE_COLORS[i % len(_LINE_COLORS)], linewidth=1.3)
+    ax.margins(x=0.02, y=0.05)
+    ax.tick_params(labelsize=6, length=2)
+    for sp in ax.spines.values():
+        sp.set_linewidth(0.5)
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', transparent=True, bbox_inches='tight', pad_inches=0.04)
+    return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
+
+
 def _make_position_card(order_idx, pos_id, cells_by_pos, ctx):
     """Build one bordered, colour-coded card holding every cell of a position.
 
@@ -446,31 +476,48 @@ def _make_position_card(order_idx, pos_id, cells_by_pos, ctx):
     tint = _TINT_COLORS[order_idx % 2]
     band = _BAND_COLORS[order_idx % 2]
     fig_size = ctx['fig_size']
-    color_mapper = ctx['color_mapper']
+    v = fig_size['v']
 
     cell_units = []
     for key in cells_by_pos[pos_id]:
         _, cell_idx = _pos_cell(key)
 
-        p_img = figure(width=fig_size['v'], height=fig_size['v'],
-                       title=f"cell {cell_idx}", toolbar_location=None)
-        p_img.image(image=[data[key]['img']], x=0, y=1, dw=1, dh=1, color_mapper=color_mapper)
-        p_img.axis.visible = False
-        p_img.grid.visible = False
-        p_img.background_fill_color = tint
-        p_img.border_fill_color = tint
+        # The thumbnail is a plain <img> in a Div, NOT a Bokeh figure: a Bokeh
+        # plot per image is far too heavy when dozens are on screen. The PNG is
+        # encoded once and cached on the cell.
+        uri = data[key].get('png_uri')
+        if uri is None:
+            uri = _img_to_datauri(data[key]['img'])
+            data[key]['png_uri'] = uri
+        img_div = Div(
+            text=(f"<div style='text-align:center;font-size:9px;color:#555'>cell {cell_idx}</div>"
+                  f"<img src='{uri}' style='width:100%;height:calc(100% - 12px);"
+                  f"object-fit:contain;image-rendering:pixelated'>"),
+            width=v, height=v, styles={'background': tint})
+        ctx['all_imgs'].append(img_div)
 
-        p_plot = figure(width=fig_size['v'], height=fig_size['v'], toolbar_location=None)
         ints = data[key].get('intensities', {})
-        for i, ch in enumerate(sorted(ints)):
-            p_plot.line(x=data[key]['time'], y=ints[ch],
-                        line_color=_LINE_COLORS[i % len(_LINE_COLORS)])
-        p_plot.background_fill_color = tint
-        p_plot.border_fill_color = tint
-
-        ctx['all_figs'].append(p_img)
-        ctx['all_figs'].append(p_plot)
-        cell_units.append(column(p_img, p_plot))   # image stacked over its intensity plot
+        if ctx.get('light'):
+            # light mode: the trace is a static PNG <img> too -> zero Bokeh
+            # canvases on the page. Rendered once at fixed resolution and cached.
+            turi = data[key].get('trace_uri')
+            if turi is None and ints:
+                turi = _trace_to_datauri(data[key]['time'], ints)
+                data[key]['trace_uri'] = turi
+            trace = Div(text=(f"<img src='{turi}' style='width:100%;height:100%;object-fit:contain'>"
+                              if turi else ""),
+                        width=v, height=v, styles={'background': tint})
+            ctx['all_imgs'].append(trace)
+            cell_units.append(column(img_div, trace))
+        else:
+            p_plot = figure(width=v, height=v, toolbar_location=None)
+            for i, ch in enumerate(sorted(ints)):
+                p_plot.line(x=data[key]['time'], y=ints[ch],
+                            line_color=_LINE_COLORS[i % len(_LINE_COLORS)])
+            p_plot.background_fill_color = tint
+            p_plot.border_fill_color = tint
+            ctx['all_figs'].append(p_plot)
+            cell_units.append(column(img_div, p_plot))   # image stacked over its intensity plot
 
     header = Div(
         text=(f"<div style='background:{band}; color:white; padding:3px 10px; "
@@ -511,7 +558,7 @@ def _pack_position_cards(position_ids, cells_by_pos, ctx, color_index=None):
     return column(*rows)
 
 
-def build_cells_dashboard(top_row=None, max_cells_per_row=6, base_fig_size=180):
+def build_cells_dashboard(top_row=None, max_cells_per_row=6, base_fig_size=180, light=False):
     """Build the interactive cell-preview dashboard from the global `data` dict.
 
     - cells are grouped per position inside a bordered, colour-coded card;
@@ -529,9 +576,11 @@ def build_cells_dashboard(top_row=None, max_cells_per_row=6, base_fig_size=180):
     ctx = {
         'fig_size': {'v': base_fig_size},   # mutated by the zoom buttons
         'color_mapper': LinearColorMapper(palette=Greys256, low=0, high=255),
-        'all_figs': [],                     # every figure, so zoom can resize them
+        'all_figs': [],                     # intensity plots, so zoom can resize them
+        'all_imgs': [],                     # image / static-trace Divs, likewise
         'selected_positions': selected_positions,
         'max_cells_per_row': max_cells_per_row,
+        'light': light,                     # static-PNG traces instead of Bokeh plots
     }
     cells_by_pos = _group_cells_by_pos()
     ordered_positions = sorted(cells_by_pos)
@@ -564,10 +613,11 @@ def build_cells_dashboard(top_row=None, max_cells_per_row=6, base_fig_size=180):
 
     # ---- zoom controls ---------------------------------------------------
     def zoom(factor):
-        ctx['fig_size']['v'] = int(max(70, min(600, ctx['fig_size']['v'] * factor)))
-        for f in ctx['all_figs']:
-            f.width = ctx['fig_size']['v']
-            f.height = ctx['fig_size']['v']
+        v = int(max(70, min(600, ctx['fig_size']['v'] * factor)))
+        ctx['fig_size']['v'] = v
+        for f in ctx['all_figs'] + ctx['all_imgs']:
+            f.width = v
+            f.height = v
     zoom_in = Button(label="Zoom +", width=90)
     zoom_out = Button(label="Zoom -", width=90)
     zoom_in.on_click(lambda: zoom(1.25))
@@ -612,21 +662,28 @@ def build_cells_dashboard(top_row=None, max_cells_per_row=6, base_fig_size=180):
     return column(*parts)
 
 
-def build_stream_dashboard(doc, stream_state, cells_per_page=24, max_cells_per_row=6,
-                           base_fig_size=180, refresh_ms=1500):
-    """Paginated dashboard that fills in live while a background worker reads the
-    file. Only one page worth of cells is materialised in the browser at a time,
-    so the page stays light even for hundreds of positions. A periodic callback
-    (on the Bokeh IO loop) reads the global `data`/`stream_state` the worker
-    thread fills, refreshes the status/page label every tick, and rebuilds the
-    cards only when the visible page actually changes."""
+def build_stream_dashboard(doc, stream_state, cells_per_page=12, max_cells_per_row=6,
+                           base_fig_size=150, refresh_ms=1500, light=True):
+    """Paginated dashboard that fills in while a background worker reads the file.
+
+    Key UX choices for performance:
+    - in light mode (default) BOTH the thumbnail and the intensity trace are
+      static <img> PNGs, so a page contains zero Bokeh canvases — it scrolls like
+      a plain web page. Untick "light mode" for interactive (hover/zoom) traces;
+    - only ONE page worth of cells is in the browser at a time;
+    - the periodic callback only updates the lightweight status/label — it never
+      rebuilds the grid on its own (that used to wipe the checkboxes and choke
+      the page). The grid is rebuilt only when YOU act: Prev/Next/Latest/Refresh,
+      change the page size, toggle light mode, or opt into "auto-follow"."""
     selected_positions = set()
     ctx = {
         'fig_size': {'v': base_fig_size},
         'color_mapper': LinearColorMapper(palette=Greys256, low=0, high=255),
-        'all_figs': [],
+        'all_figs': [],          # intensity plots on the current page (non-light only)
+        'all_imgs': [],          # image / static-trace Divs on the current page
         'selected_positions': selected_positions,
         'max_cells_per_row': max_cells_per_row,
+        'light': light,          # static-PNG traces instead of Bokeh plots
     }
 
     status_div    = Div(text="<b>Starting…</b>", width=700)
@@ -634,7 +691,9 @@ def build_stream_dashboard(doc, stream_state, cells_per_page=24, max_cells_per_r
     selected_div  = Div(text="<b>No position selected yet.</b>", width=500)
     export_status = Div(text="", width=700)
     page_container = column()
-    page = {'i': 0, 'follow': True, 'rendered': None, 'size': cells_per_page}
+    # follow defaults OFF: the view stays put (and keeps your ticks) while data
+    # streams in; you pull updates with Refresh/Latest or opt into auto-follow.
+    page = {'i': 0, 'follow': False, 'rendered': None, 'size': cells_per_page, 'render_count': 0}
 
     def refresh_selected():
         if selected_positions:
@@ -689,63 +748,106 @@ def build_stream_dashboard(doc, stream_state, cells_per_page=24, max_cells_per_r
         next_btn.disabled = (i >= total - 1)
 
     def render_page():
+        """Rebuild the visible page. Called only on explicit user action."""
         cells_by_pos, positions, pages, i = current_view()
         page['i'] = i
+        page['render_count'] = len(positions)
         color_index = {p: idx for idx, p in enumerate(positions)}   # stable colour per position
         page_positions = pages[i]
-        ctx['all_figs'] = []                                        # only current-page figures stay live
+        ctx['all_figs'] = []                                        # only current-page glyphs stay live
+        ctx['all_imgs'] = []
         page_container.children = [
             _pack_position_cards(page_positions, cells_by_pos, ctx, color_index)]
         page['rendered'] = page_positions
         update_label(i, len(pages), page_positions)
+        refresh_btn.label = "🔄 Refresh"
+        refresh_btn.button_type = "default"
 
     def refresh():
+        """Periodic (cheap): update status + page total + 'new' badge only. Never
+        rebuilds the grid unless the user opted into auto-follow."""
         st = stream_state
+        cbp = _group_cells_by_pos()
+        positions = sorted(cbp)
+        pages = compute_pages(positions, cbp)
+        navailable = len(positions)
+
         verb = 'Done' if st.get('done') else 'Processing'
         msg = (f"<b>{verb}:</b> {st.get('pos_done', 0)}/{st.get('pos_total', '?')} "
-               f"positions read · {len(_group_cells_by_pos())} with cells · "
-               f"{len(selected_positions)} kept")
+               f"positions read · {navailable} with cells · {len(selected_positions)} kept")
         if st.get('error'):
             msg += f" · <span style='color:red'>ERROR: {st['error']}</span>"
         status_div.text = msg
-        # rebuild cards only when the visible slice changed, but always keep the
-        # page label / total fresh so "/N" grows while you sit on an earlier page
-        _, _, pages, i = current_view()
-        page['i'] = i
-        page_positions = pages[i]
-        if page_positions != page['rendered']:
+
+        if page['follow']:
+            i = len(pages) - 1
+            if pages[i] != page['rendered']:
+                render_page()
+            else:
+                update_label(i, len(pages), pages[i])
+            return
+
+        # not following: first cells ever -> one-time fill so it isn't blank
+        if not page['rendered'] and navailable > 0:
             render_page()
+            return
+        i = min(max(0, page['i']), len(pages) - 1)
+        update_label(i, len(pages), page['rendered'] or [])
+        new = navailable - page['render_count']
+        if new > 0:
+            refresh_btn.label = f"🔄 Refresh ({new} new)"
+            refresh_btn.button_type = "warning"
         else:
-            update_label(i, len(pages), page_positions)
+            refresh_btn.label = "🔄 Refresh"
+            refresh_btn.button_type = "default"
 
     # ---- navigation ------------------------------------------------------
     def go_prev():
+        autofollow_cb.active = []           # browsing turns auto-follow off
         page['follow'] = False
         page['i'] = max(0, page['i'] - 1)
         render_page()
     def go_next():
+        autofollow_cb.active = []
         page['follow'] = False
-        page['i'] += 1                     # current_view() clamps to the last page
+        page['i'] += 1                      # current_view() clamps to the last page
         render_page()
     def go_latest():
-        page['follow'] = True
+        autofollow_cb.active = []
+        page['follow'] = False
+        page['i'] = 10 ** 9                 # current_view() clamps to the last page
         render_page()
-    prev_btn   = Button(label="◀ Prev", width=80)
-    next_btn   = Button(label="Next ▶", width=80)
-    latest_btn = Button(label="Follow latest", button_type="primary", width=120)
+    prev_btn    = Button(label="◀ Prev", width=80)
+    next_btn    = Button(label="Next ▶", width=80)
+    latest_btn  = Button(label="⏭ Latest", width=90)
+    refresh_btn = Button(label="🔄 Refresh", button_type="default", width=140)
     prev_btn.on_click(go_prev)
     next_btn.on_click(go_next)
     latest_btn.on_click(go_latest)
+    refresh_btn.on_click(lambda: render_page())
+
+    autofollow_cb = CheckboxGroup(labels=['auto-follow new positions'], active=[])
+    def on_autofollow(attr, old, new):
+        page['follow'] = bool(new)
+        if new:                              # jump to and start tracking the latest page
+            render_page()
+    autofollow_cb.on_change('active', on_autofollow)
+
+    light_cb = CheckboxGroup(labels=['light mode (static traces, fastest)'],
+                             active=[0] if light else [])
+    def on_light(attr, old, new):
+        ctx['light'] = bool(new)
+        render_page()                        # rebuild current page in the chosen mode
+    light_cb.on_change('active', on_light)
 
     # ---- cells-per-page dropdown -----------------------------------------
-    size_options = ['6', '12', '24', '48', '100', 'all']
+    size_options = ['4', '8', '12', '24', '48', 'all']
     size_select = Select(title="Cells/page",
-                         value=str(cells_per_page) if str(cells_per_page) in size_options else '24',
+                         value=str(cells_per_page) if str(cells_per_page) in size_options else '12',
                          options=size_options, width=90)
     def on_size_change(attr, old, new):
         anchor = page['rendered'][0] if page['rendered'] else None   # keep the top position in view
         page['size'] = 10 ** 9 if new == 'all' else int(new)
-        page['follow'] = False
         if anchor is not None:
             cells_by_pos = _group_cells_by_pos()
             for idx, pg in enumerate(compute_pages(sorted(cells_by_pos), cells_by_pos)):
@@ -757,11 +859,11 @@ def build_stream_dashboard(doc, stream_state, cells_per_page=24, max_cells_per_r
 
     # ---- zoom (batched so every plot resizes in a single update) ---------
     def zoom(factor):
-        ctx['fig_size']['v'] = int(max(70, min(600, ctx['fig_size']['v'] * factor)))
-        v = ctx['fig_size']['v']
+        v = int(max(70, min(600, ctx['fig_size']['v'] * factor)))
+        ctx['fig_size']['v'] = v
         doc.hold()                          # collect all the size changes...
         try:
-            for f in ctx['all_figs']:
+            for f in ctx['all_figs'] + ctx['all_imgs']:
                 f.width = v
                 f.height = v
         finally:
@@ -793,8 +895,8 @@ def build_stream_dashboard(doc, stream_state, cells_per_page=24, max_cells_per_r
     print_button = Button(label="Print kept positions", button_type="primary", width=180)
     print_button.on_click(lambda: print("kept positions:", sorted(selected_positions)))
 
-    nav = row(prev_btn, next_btn, latest_btn, size_select, page_label)
-    controls = row(Div(text="<b>Zoom plots:</b>", width=80), zoom_in, zoom_out)
+    nav = row(prev_btn, next_btn, latest_btn, refresh_btn, size_select, page_label)
+    controls = row(light_cb, autofollow_cb, Div(text="<b>Zoom:</b>", width=50), zoom_in, zoom_out)
     tabs = Tabs(tabs=[
         TabPanel(child=column(nav, page_container), title="Cells by position"),
         TabPanel(child=column(selected_div, row(print_button, export_button), export_status),
@@ -840,10 +942,13 @@ def _stream_worker(file, low_crop, high_crop, model_detect, n, max_factor, state
 
 
 def run_server_stream(file, low_crop, high_crop, model_detect, n=-9999, max_factor=1.5,
-                      port=5007, cells_per_page=24, max_cells_per_row=6, base_fig_size=180,
-                      verbose=False):
+                      port=5007, cells_per_page=12, max_cells_per_row=6, base_fig_size=150,
+                      light=True, verbose=False):
     """Start a Bokeh server that reads the nd2 in the background and displays
     positions as they are detected, one page at a time.
+
+    `light=True` (default) renders traces as static PNGs (zero Bokeh canvases,
+    fastest); it can also be toggled live from the page.
 
     Usage from the notebook (no separate process() call needed):
         model = prev.load_model(model_path)
@@ -857,7 +962,7 @@ def run_server_stream(file, low_crop, high_crop, model_detect, n=-9999, max_fact
     def modify(doc):
         doc.add_root(build_stream_dashboard(doc, state, cells_per_page=cells_per_page,
                                             max_cells_per_row=max_cells_per_row,
-                                            base_fig_size=base_fig_size))
+                                            base_fig_size=base_fig_size, light=light))
         if not state['started']:               # launch the reader once, on first connect
             state['started'] = True
             threading.Thread(
